@@ -1,12 +1,569 @@
 #include "stm32f10x.h"
+#include "Delay.h"
+#include "OLED.h"
+#include "LED.h"
+#include "Key.h"
+#include "DS18B20.h"
+#include "Buzzer.h"
+#include "USART.h"
+#include "DAC_Output.h"
+#include "Tick.h"
 
+/*==================== 参数配置 ====================*/
+#define TEMP_LOW_MIN     0.0f
+#define TEMP_LOW_MAX     59.0f
+#define TEMP_HIGH_MIN    1.0f
+#define TEMP_HIGH_MAX    60.0f
+#define TEMP_MIN_GAP     1.0f     /* 上下限最小间隔 */
+#define TEMP_HYST        0.5f     /* 报警回差（防抖动） */
+#define REPORT_INTERVAL  1000     /* 上报间隔（ms） */
+#define DISPLAY_INTERVAL 300      /* 刷新间隔（ms） */
+#define BEEP_INTERVAL    200      /* 报警声光切换间隔（ms） */
+#define KEY_DEBOUNCE_MS  10       /* 按键去抖（ms） */
+#define KEY_LONG_MS      800      /* 长按阈值（ms） */
+
+/*==================== 全局变量 ====================*/
+static float   g_tempLow  = 20.0f;		//温度下限
+static float   g_tempHigh = 60.0f;		//温度上限
+static float   g_temp     = 0.0f;		//当前温度
+static uint8_t g_alarm    = 0;			//0 正常；1 报警
+static uint8_t g_setField = 0;			//0 监测；1 设置下限；2 设置上限
+
+/*==================== 函数原型 ====================*/
+static void Show_Temp(uint8_t Line, uint8_t Col, float t);
+static void Show_Volt(uint8_t Line, uint8_t Col, float v);
+static void Show_Int(uint8_t Line, uint8_t Col, int16_t v);
+static void Show_Main(void);
+static void Show_Set(void);
+static uint8_t Key_GetEvent(void);
+static uint8_t U16ToStr(uint16_t v, char *buf);
+static int16_t StrToInt(const char *s);
+static void Limit_Params(void);
+static void Temp_Task(void);
+static void Alarm_Task(void);
+static void Display_Task(void);
+static void Report_Task(void);
+static void Command_Task(void);
+static void Alarm_Output(void);
+static void Status_LED(void);
+
+/*==================== 显示辅助 ====================*/
+/**
+  * @brief  显示温度（1 位小数），如 25.3 / -5.3
+  */
+static void Show_Temp(uint8_t Line, uint8_t Col, float t)
+{
+	int16_t t10, ip, dp;
+	uint8_t col = Col;
+
+	if (t < -50.0f)
+	{
+		OLED_ShowString(Line, Col, "--.-");
+		return;
+	}
+	t10 = (int16_t)(t * 10.0f + (t >= 0 ? 0.5f : -0.5f));
+	ip = t10 / 10;
+	dp = t10 % 10;
+	if (dp < 0) dp = -dp;
+
+	if (ip < 0)
+	{
+		OLED_ShowChar(Line, col, '-');
+		col++;
+		ip = -ip;
+	}
+	if (ip >= 10)
+	{
+		OLED_ShowNum(Line, col, (uint32_t)ip, 2);
+		col += 2;
+	}
+	else
+	{
+		OLED_ShowNum(Line, col, (uint32_t)ip, 1);
+		col += 1;
+	}
+	OLED_ShowChar(Line, col, '.');
+	col++;
+	OLED_ShowNum(Line, col, (uint32_t)dp, 1);
+}
+
+/**
+  * @brief  显示电压（2 位小数），如 1.65
+  */
+static void Show_Volt(uint8_t Line, uint8_t Col, float v)
+{
+	int16_t v100, ip, dp;
+	uint8_t col = Col;
+
+	if (v < 0.0f) v = 0.0f;
+	v100 = (int16_t)(v * 100.0f + 0.5f);
+	ip = v100 / 100;
+	dp = v100 % 100;
+
+	if (ip >= 10)
+	{
+		OLED_ShowNum(Line, col, (uint32_t)ip, 2);
+		col += 2;
+	}
+	else
+	{
+		OLED_ShowNum(Line, col, (uint32_t)ip, 1);
+		col += 1;
+	}
+	OLED_ShowChar(Line, col, '.');
+	col++;
+	OLED_ShowNum(Line, col, (uint32_t)dp, 2);
+}
+
+/**
+  * @brief  显示整数
+  */
+static void Show_Int(uint8_t Line, uint8_t Col, int16_t v)
+{
+	if (v < 0) v = 0;
+	if (v >= 10)
+	{
+		OLED_ShowNum(Line, Col, (uint32_t)v, 2);
+	}
+	else
+	{
+		OLED_ShowNum(Line, Col, (uint32_t)v, 1);
+	}
+}
+
+/*==================== 显示界面 ====================*/
+static void Show_Main(void)
+{
+	OLED_ShowString(1, 1, "T:");
+	Show_Temp(1, 3, g_temp);
+	OLED_ShowString(1, 8, "C");
+
+	OLED_ShowString(2, 1, "L:");
+	Show_Int(2, 3, (int16_t)g_tempLow);
+	OLED_ShowString(2, 6, "H:");
+	Show_Int(2, 8, (int16_t)g_tempHigh);
+
+	OLED_ShowString(3, 1, "V:");
+	Show_Volt(3, 3, DAC_Output_GetVoltage(g_temp));
+	OLED_ShowString(3, 7, "V");
+
+	if (g_alarm)
+	{
+		OLED_ShowString(4, 1, "ALARM!");
+	}
+	else
+	{
+		OLED_ShowString(4, 1, "READY");
+	}
+}
+
+static void Show_Set(void)
+{
+	OLED_ShowString(1, 1, "T:");
+	Show_Temp(1, 3, g_temp);
+	OLED_ShowString(1, 8, "C");
+
+	OLED_ShowString(2, 1, "L:");
+	Show_Int(2, 3, (int16_t)g_tempLow);
+	OLED_ShowString(2, 6, "H:");
+	Show_Int(2, 8, (int16_t)g_tempHigh);
+
+	if (g_setField == 1)
+	{
+		OLED_ShowString(4, 1, "SET LOW");
+	}
+	else
+	{
+		OLED_ShowString(4, 1, "SET HIGH");
+	}
+}
+
+/*==================== 按键事件 ====================*/
+#define KEY_EVT_NONE   0
+#define KEY1_SHORT     1
+#define KEY2_SHORT     2
+#define KEY2_LONG      3
+
+/**
+  * @brief  读取按键事件（带消抖与长按识别）
+  * @retval 0 无；1 Key1 短按；2 Key2 短按；3 Key2 长按
+  */
+static uint8_t Key_GetEvent(void)
+{
+	static uint8_t stableState = 0;
+	static uint8_t lastStable = 0;
+	static uint32_t changeMs = 0;
+	static uint32_t pressMs = 0;
+	static uint8_t longFired = 0;
+	uint8_t raw = Key_Scan();
+	uint8_t evt = KEY_EVT_NONE;
+
+	if (raw != stableState)						//状态变化，重新计时去抖
+	{
+		stableState = raw;
+		changeMs = millis();
+		return KEY_EVT_NONE;
+	}
+	if (millis() - changeMs < KEY_DEBOUNCE_MS)
+	{
+		return KEY_EVT_NONE;
+	}
+
+	if (stableState != 0)
+	{
+		if (lastStable == 0)
+		{
+			pressMs = millis();
+			longFired = 0;
+		}
+		else if (stableState == 2 && !longFired && millis() - pressMs >= KEY_LONG_MS)
+		{
+			longFired = 1;
+			evt = KEY2_LONG;
+		}
+	}
+	else if (lastStable != 0)
+	{
+		if (lastStable == 1)
+		{
+			evt = KEY1_SHORT;
+		}
+		else if (lastStable == 2 && !longFired)
+		{
+			evt = KEY2_SHORT;
+		}
+	}
+
+	lastStable = stableState;
+	return evt;
+}
+
+/*==================== 字符串/数字转换 ====================*/
+static uint8_t U16ToStr(uint16_t v, char *buf)
+{
+	uint8_t i = 0, j = 0;
+	char tmp[8];
+
+	if (v == 0)
+	{
+		buf[0] = '0';
+		return 1;
+	}
+	while (v > 0)
+	{
+		tmp[j++] = (char)('0' + (v % 10));
+		v /= 10;
+	}
+	while (j > 0)
+	{
+		buf[i++] = tmp[--j];
+	}
+	return i;
+}
+
+static int16_t StrToInt(const char *s)
+{
+	int16_t v = 0;
+	uint8_t neg = 0;
+
+	if (*s == '-') { neg = 1; s++; }
+	while (*s >= '0' && *s <= '9')
+	{
+		v = (int16_t)(v * 10 + (*s - '0'));
+		s++;
+	}
+	return neg ? -v : v;
+}
+
+/*==================== 参数限幅 ====================*/
+static void Limit_Params(void)
+{
+	if (g_tempLow < TEMP_LOW_MIN)  g_tempLow = TEMP_LOW_MIN;
+	if (g_tempLow > TEMP_LOW_MAX)  g_tempLow = TEMP_LOW_MAX;
+	if (g_tempHigh < TEMP_HIGH_MIN) g_tempHigh = TEMP_HIGH_MIN;
+	if (g_tempHigh > TEMP_HIGH_MAX) g_tempHigh = TEMP_HIGH_MAX;
+
+	if (g_tempHigh < g_tempLow + TEMP_MIN_GAP)
+	{
+		g_tempHigh = g_tempLow + TEMP_MIN_GAP;
+		if (g_tempHigh > TEMP_HIGH_MAX)
+		{
+			g_tempHigh = TEMP_HIGH_MAX;
+			g_tempLow = g_tempHigh - TEMP_MIN_GAP;
+		}
+	}
+}
+
+/*==================== 任务：温度采集 ====================*/
+static void Temp_Task(void)
+{
+	static uint32_t lastMs = 0;
+	static uint8_t state = 0;					//0 启动转换；1 等待读取
+
+	if (state == 0)
+	{
+		DS18B20_Start();
+		state = 1;
+		lastMs = millis();
+	}
+	else if (millis() - lastMs >= 750)			//12 位分辨率最长转换时间 750ms
+	{
+		float t = DS18B20_Get_Temp();
+		if (t > -50.0f)
+		{
+			g_temp = t;
+		}
+		state = 0;
+	}
+}
+
+/*==================== 任务：报警判断 ====================*/
+static void Alarm_Task(void)
+{
+	if (g_alarm == 0)
+	{
+		if (g_temp > g_tempHigh || g_temp < g_tempLow)
+		{
+			g_alarm = 1;
+		}
+	}
+	else
+	{
+		if (g_temp <= g_tempHigh - TEMP_HYST && g_temp >= g_tempLow + TEMP_HYST)
+		{
+			g_alarm = 0;
+		}
+	}
+}
+
+/*==================== 任务：显示 ====================*/
+static void Display_Task(void)
+{
+	static uint32_t last = 0;
+
+	if (millis() - last >= DISPLAY_INTERVAL)
+	{
+		last = millis();
+		if (g_setField == 0)
+		{
+			Show_Main();
+		}
+		else
+		{
+			Show_Set();
+		}
+	}
+}
+
+/*==================== 任务：上报 ====================*/
+static void Report_Task(void)
+{
+	static uint32_t last = 0;
+	char buf[48];
+	uint8_t n = 0;
+	int16_t t10, dp;
+
+	if (millis() - last < REPORT_INTERVAL)
+	{
+		return;
+	}
+	last = millis();
+
+	buf[n++] = 'T';
+	buf[n++] = ':';
+	t10 = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
+	if (t10 < 0)
+	{
+		buf[n++] = '-';
+		t10 = -t10;
+	}
+	n += U16ToStr((uint16_t)(t10 / 10), buf + n);
+	dp = (int16_t)(t10 % 10);
+	buf[n++] = '.';
+	buf[n++] = (char)('0' + dp);
+
+	buf[n++] = ',';
+	buf[n++] = 'A';
+	buf[n++] = ':';
+	buf[n++] = (char)('0' + g_alarm);
+
+	buf[n++] = ',';
+	buf[n++] = 'T';
+	buf[n++] = 'L';
+	buf[n++] = ':';
+	n += U16ToStr((uint16_t)g_tempLow, buf + n);
+
+	buf[n++] = ',';
+	buf[n++] = 'T';
+	buf[n++] = 'H';
+	buf[n++] = ':';
+	n += U16ToStr((uint16_t)g_tempHigh, buf + n);
+
+	buf[n++] = ',';
+	buf[n++] = 'V';
+	buf[n++] = ':';
+	{
+		int16_t v100;
+		float v = DAC_Output_GetVoltage(g_temp);
+		if (v < 0.0f) v = 0.0f;
+		v100 = (int16_t)(v * 100.0f + 0.5f);
+		n += U16ToStr((uint16_t)(v100 / 100), buf + n);
+		buf[n++] = '.';
+		if (v100 % 100 < 10)
+		{
+			buf[n++] = '0';
+			buf[n++] = (char)('0' + v100 % 10);
+		}
+		else
+		{
+			n += U16ToStr((uint16_t)(v100 % 100), buf + n);
+		}
+	}
+
+	buf[n++] = '\r';
+	buf[n++] = '\n';
+	buf[n] = '\0';
+
+	USART1_SendString(buf);
+}
+
+/*==================== 任务：串口命令 ====================*/
+static void Command_Task(void)
+{
+	static char line[32];
+	static uint8_t idx = 0;
+	uint8_t c;
+
+	while (USART1_RxAvailable())
+	{
+		c = USART1_GetRxByte();
+		if (c == '\r' || c == '\n')
+		{
+			line[idx] = '\0';
+			if (idx > 0)
+			{
+				if (line[0] == 'T' && line[1] == 'L' && line[2] == '=')
+				{
+					int16_t v = StrToInt(line + 3);
+					if (v >= TEMP_LOW_MIN && v <= TEMP_LOW_MAX)
+					{
+						g_tempLow = (float)v;
+					}
+				}
+				else if (line[0] == 'T' && line[1] == 'H' && line[2] == '=')
+				{
+					int16_t v = StrToInt(line + 3);
+					if (v >= TEMP_HIGH_MIN && v <= TEMP_HIGH_MAX)
+					{
+						g_tempHigh = (float)v;
+					}
+				}
+				Limit_Params();
+			}
+			idx = 0;
+		}
+		else if (idx < sizeof(line) - 1)
+		{
+			line[idx++] = (char)c;
+		}
+	}
+}
+
+/*==================== 报警输出 ====================*/
+static void Alarm_Output(void)
+{
+	static uint32_t lastBeep = 0;
+
+	if (g_alarm)
+	{
+		if (millis() - lastBeep >= BEEP_INTERVAL)
+		{
+			lastBeep = millis();
+			Buzzer_Turn();
+			LED1_Turn();
+		}
+	}
+	else
+	{
+		Buzzer_OFF();
+		LED1_OFF();
+	}
+}
+
+/*==================== 状态指示灯 ====================*/
+static void Status_LED(void)
+{
+	static uint32_t last = 0;
+
+	if (millis() - last >= 1000)
+	{
+		last = millis();
+		LED2_Turn();
+	}
+}
+
+/*==================== 主函数 ====================*/
 int main(void)
 {
-  RCC->APB2ENR =0X00000010;
-	GPIOC->CRH = 0X00300000;
-	GPIOC->ODR = 0X00002000;
+	LED_Init();
+	Key_Init();
+	OLED_Init();
+	DS18B20_Init();
+	Buzzer_Init();
+	USART1_Init();
+	DAC_Output_Init();
+	Tick_Init();
+
+	OLED_Clear();
+	OLED_ShowString(1, 1, "Temp Monitor");
+	OLED_ShowString(2, 1, "Init...");
+	Delay_ms(500);
+	OLED_Clear();
+
 	while (1)
 	{
-		
+		Temp_Task();
+		Alarm_Task();
+		Display_Task();
+		Report_Task();
+		Command_Task();
+
+		switch (Key_GetEvent())
+		{
+			case KEY1_SHORT:					//Key1 短按：切换设置项
+				g_setField = (uint8_t)((g_setField + 1) % 3);
+				break;
+
+			case KEY2_SHORT:					//Key2 短按：当前项 +1
+				if (g_setField == 1)
+				{
+					g_tempLow += 1.0f;
+				}
+				else if (g_setField == 2)
+				{
+					g_tempHigh += 1.0f;
+				}
+				Limit_Params();
+				break;
+
+			case KEY2_LONG:						//Key2 长按：当前项 -1
+				if (g_setField == 1)
+				{
+					g_tempLow -= 1.0f;
+				}
+				else if (g_setField == 2)
+				{
+					g_tempHigh -= 1.0f;
+				}
+				Limit_Params();
+				break;
+
+			default:
+				break;
+		}
+
+		DAC_Output_SetTemp(g_temp);
+		Alarm_Output();
+		Status_LED();
 	}
 }

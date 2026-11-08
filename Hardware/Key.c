@@ -47,3 +47,20 @@ uint8_t Key_GetNum(void)
 	
 	return KeyNum;			//返回键码值，如果没有按键按下，所有if都不成立，则键码为默认值0
 }
+
+/**
+  * @brief  按键扫描（非阻塞）
+  * @retval 0 无按键；1 Key1 按下；2 Key2 按下
+  */
+uint8_t Key_Scan(void)
+{
+	if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_1) == 0)			//读 PB1，低电平表示按下
+	{
+		return 1;
+	}
+	if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_11) == 0)			//读 PB11
+	{
+		return 2;
+	}
+	return 0;
+}

@@ -23,6 +23,8 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f10x_it.h"
+#include "Tick.h"				/* 毫秒时基 */
+#include "USART.h"				/* 串口接收 */
 
 /** @addtogroup STM32F10x_StdPeriph_Template
   * @{
@@ -134,6 +136,26 @@ void PendSV_Handler(void)
   */
 void SysTick_Handler(void)
 {
+}
+
+/**
+  * @brief  TIM2 全局中断：1ms 时基累加
+  */
+void TIM2_IRQHandler(void)
+{
+	if (TIM_GetITStatus(TIM2, TIM_IT_Update) != RESET)
+	{
+		TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
+		Tick_Inc();
+	}
+}
+
+/**
+  * @brief  USART1 全局中断：接收数据
+  */
+void USART1_IRQHandler(void)
+{
+	USART1_RxHandler();
 }
 
 /******************************************************************************/
