@@ -25,20 +25,82 @@
 
 ---
 
-## 2. 硬件清单与连接
+## 2. 硬件连接
 
-| 模块 | 数量 | 连接引脚 | 说明 |
-| --- | --- | --- | --- |
-| STM32F103C8T6 最小系统板 | 1 | — | 主控 |
-| DS18B20 温度传感器 | 1 | PB10（DQ） | 1-Wire，需 4.7 kΩ 上拉电阻 |
-| 0.96" OLED（SSD1306，I²C） | 1 | PB8（SCL）/ PB9（SDA） | 软件 I²C |
-| 按键 | 2 | PB1 / PB11 | 上拉输入 |
-| 有源蜂鸣器 | 1 | PB0 | 高电平触发（低电平触发改 `BUZZER_ON_LEVEL`） |
-| LED | 2 | PA1（报警灯）/ PA2（状态灯） | 低电平点亮 |
-| **NRF24L01 无线模块** | 1 | PB12(CSN)/PB13(SCK)/PB14(MISO)/PB15(MOSI)/PB6(CE) | SPI2，3.3 V |
-| RC 滤波 | 1 | PA6 → R10k → C100n → GND | PWM 低通，输出 0~3.3 V |
-| NRF24L01 接收器（接收端） | 1 | USB 转串口 → 电脑 | 把无线数据转发到电脑串口 |
-| USB-TTL（可选） | 1 | PA9(TX)/PA10(RX) | 本地串口设置/调试 |
+### 2.1 系统架构与数据流
+
+```mermaid
+flowchart LR
+    subgraph MONITOR[监测端]
+        MCU[STM32F103C8T6]
+        SENSOR[DS18B20<br/>PB10]
+        OLED[OLED<br/>PB8/PB9]
+        KEY[按键<br/>PB1/PB11]
+        ALARM[蜂鸣器 PB0<br/>LED PA1/PA2]
+        DAC[PWM 输出 PA6]
+        TX[NRF24L01 发送<br/>SPI2]
+        SENSOR --> MCU
+        OLED --> MCU
+        KEY --> MCU
+        ALARM --> MCU
+        DAC --> MCU
+        MCU -->|SPI| TX
+    end
+
+    TX ==>|2.4G 无线| RX[NRF24L01 接收]
+
+    subgraph PC[接收端（电脑）]
+        direction TB
+        RXMCU[接收端主控<br/>另一块开发板 或 无线串口模块]
+        APP[Python 上位机<br/>temp_monitor.py]
+        RX -->|SPI| RXMCU
+        RXMCU -->|USB 串口| APP
+    end
+```
+
+> ⚠️ **NRF24L01 没有 WiFi，也不是串口设备。** 它是 2.4G 射频收发芯片，模块用 **SPI** 与主控相连；电脑那头的接收器负责把无线数据转到 **USB 串口**，电脑通过串口读数据。
+
+### 2.2 监测端接线（STM32）
+
+| 外设 | 引脚 | 说明 |
+| --- | --- | --- |
+| DS18B20 DQ | PB10 | 1-Wire，需 4.7 kΩ 上拉电阻到 VCC |
+| OLED SCL / SDA | PB8 / PB9 | 软件 I²C |
+| 按键 Key1 / Key2 | PB1 / PB11 | 上拉输入，低电平有效 |
+| 蜂鸣器 | PB0 | 有源蜂鸣器；低电平触发改 `BUZZER_ON_LEVEL` |
+| LED1 / LED2 | PA1 / PA2 | 低电平点亮 |
+| PWM 输出 | PA6 | → R10k → C100n → GND，输出 0~3.3 V |
+| USART1 TX / RX | PA9 / PA10 | USB-TTL，本地设阈值/调试（可选） |
+
+### 2.3 NRF24L01 接线（重点）
+
+NRF24L01 模块（8 脚）与 STM32 的连线：
+
+| NRF24L01 引脚 | STM32 引脚 | 说明 |
+| --- | --- | --- |
+| VCC | **3.3 V** | ⚠️ 必须 3.3 V，接 5 V 会烧模块 |
+| GND | GND | 共地 |
+| CE | PB6 | 收发使能（GPIO） |
+| CSN | PB12 | SPI2 片选（GPIO） |
+| SCK | PB13 | SPI2 时钟 |
+| MOSI | PB15 | SPI2 主出从入 |
+| MISO | PB14 | SPI2 主入从出 |
+| IRQ | 不接 | 本驱动用状态寄存器轮询 |
+
+> 模块必须用 **SPI** 接 STM32（PB12~PB15 + PB6）。如果你手上是以太网口（TX/RX）的「无线串口模块」，那是另一种硬件，接线和本工程代码不同，需要告诉我。
+
+### 2.4 接收端（电脑）
+
+接收端必须是「NRF24L01 + 能把数据转到串口的设备」，二选一：
+
+| 方案 | 组成 | 说明 |
+| --- | --- | --- |
+| A. 另一块开发板 | 第二块 STM32/单片机 + NRF24L01，跑接收端固件，通过 USB 串口连电脑 | 需要接收端固件（可复用本工程，改为接收角色） |
+| B. 成品无线串口模块 | 一对「NRF24L01 无线串口模块」（UART 接口），直接插电脑 USB 串口 | 需用配套工具把频道/地址配成与监测端一致 |
+
+无论哪种方案，都要与监测端匹配：**频道 76（2476 MHz）、1 Mbps、地址 `0x12 34 56 78 9A`、负载 16 字节**。
+
+电脑端运行 `PC_Software/temp_monitor.py` 读串口显示。
 
 ---
 
