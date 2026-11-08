@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | STM32F103C8T6 最小系统板 | 1 | — | 主控 |
 | DS18B20 温度传感器 | 1 | PB10（DQ） | 1-Wire，需 4.7 kΩ 上拉电阻 |
-| 0.96" OLED（SSD1306） | 1 | PB8（SCL）/ PB9（SDA） | 软件 I2C |
+| 0.96" OLED（SSD1306，I²C） | 1 | PB8（SCL）/ PB9（SDA） | 软件 I²C |
 | 按键 | 2 | PB1 / PB11 | 上拉输入 |
 | 有源蜂鸣器 | 1 | PB0 | 高电平触发 |
 | LED | 2 | PA1（报警灯）/ PA2（状态灯） | 低电平点亮 |
@@ -59,15 +59,15 @@ wenkong/
 
 ## 4. 构建与烧录
 
-- **IDE**：Keil MDK 5（`D:\Keil_v5`），器件包 Keil.STM32F1xx_DFP 2.4.1
+- **IDE**：Keil MDK 5（`E:\Keil_v5`，完整工具链在 E 盘），器件包 Keil.STM32F1xx_DFP 2.4.1
 - **GUI**：打开 `Project.uvprojx` → Rebuild → Download
 - **命令行**：
 
   ```powershell
-  & "D:\Keil_v5\UV4\UV4.exe" -b Project.uvprojx -o build.log
+  & "E:\Keil_v5\UV4\UV4.exe" -b Project.uvprojx -o build.log
   ```
 
-  退出码 0 表示成功，日志写入 `build.log`。
+  退出码 0 表示成功，日志写入 `build.log`（当前已验证：0 错误 0 警告）。
 
 ---
 
