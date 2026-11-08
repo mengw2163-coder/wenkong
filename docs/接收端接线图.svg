@@ -1,0 +1,96 @@
+<svg viewBox="0 0 1060 820" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <text x="530" y="32" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2937">智能温度监测报警器 · 接收端接线图（两种方案）</text>
+
+  <!-- ==================== 方案 A ==================== -->
+  <rect x="40" y="60" width="980" height="330" rx="10" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="60" y="92" font-size="15" font-weight="600" fill="#334155">方案 A：第二块 STM32 开发板 + NRF24L01（SPI）</text>
+  <text x="60" y="112" font-size="11" fill="#6b7280">把 User/main.c 里 NRF_ROLE 改成 NRF_ROLE_RECEIVER，编译下载到第二块板</text>
+
+  <!-- STM32 -->
+  <rect x="80" y="130" width="240" height="240" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="200" y="154" text-anchor="middle" font-size="14" font-weight="600" fill="#3730a3">STM32F103C8T6</text>
+  <text x="200" y="172" text-anchor="middle" font-size="11" fill="#6b7280">（第二块，接收角色）</text>
+  <text x="95" y="200" font-size="11" fill="#1f2937">PA9  (USART1_TX)</text>
+  <text x="95" y="222" font-size="11" fill="#1f2937">PB6  (NRF_CE)</text>
+  <text x="95" y="244" font-size="11" fill="#1f2937">PB12 (NRF_CSN)</text>
+  <text x="95" y="266" font-size="11" fill="#1f2937">PB13 (NRF_SCK)</text>
+  <text x="95" y="288" font-size="11" fill="#1f2937">PB14 (NRF_MISO)</text>
+  <text x="95" y="310" font-size="11" fill="#1f2937">PB15 (NRF_MOSI)</text>
+  <text x="95" y="340" font-size="11" fill="#6b7280">最小系统同监测端</text>
+  <text x="95" y="358" font-size="11" fill="#6b7280">3.3V / GND / 晶振 / 复位 / SWD</text>
+
+  <!-- NRF24L01 -->
+  <rect x="440" y="130" width="280" height="240" rx="8" fill="#eef2ff" stroke="#6366f1"/>
+  <text x="580" y="154" text-anchor="middle" font-size="14" font-weight="600" fill="#3730a3">NRF24L01（接收）</text>
+  <text x="580" y="178" text-anchor="middle" font-size="11" fill="#6b7280">与监测端同型号，参数一致</text>
+  <text x="455" y="206" font-size="11" fill="#1f2937">VCC → 3.3V（勿接 5V）</text>
+  <text x="455" y="228" font-size="11" fill="#1f2937">GND → GND</text>
+  <text x="455" y="250" font-size="11" fill="#1f2937">CE → PB6</text>
+  <text x="455" y="272" font-size="11" fill="#1f2937">CSN → PB12</text>
+  <text x="455" y="294" font-size="11" fill="#1f2937">SCK → PB13</text>
+  <text x="455" y="316" font-size="11" fill="#1f2937">MOSI → PB15</text>
+  <text x="455" y="338" font-size="11" fill="#1f2937">MISO → PB14</text>
+  <text x="455" y="360" font-size="11" fill="#1f2937">IRQ → 不接</text>
+
+  <!-- USB-TTL -->
+  <rect x="790" y="130" width="200" height="90" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="890" y="154" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">USB 转串口</text>
+  <text x="890" y="176" text-anchor="middle" font-size="11" fill="#1f2937">RX ← PA9(TX)</text>
+  <text x="890" y="196" text-anchor="middle" font-size="11" fill="#1f2937">TX → PA10(RX，可选)</text>
+  <text x="890" y="212" text-anchor="middle" font-size="11" fill="#6b7280">GND 共地</text>
+
+  <!-- 电脑 -->
+  <rect x="790" y="250" width="200" height="120" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="890" y="278" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">电脑</text>
+  <text x="890" y="300" text-anchor="middle" font-size="11" fill="#1f2937">USB 线接 USB-TTL</text>
+  <text x="890" y="322" text-anchor="middle" font-size="11" fill="#1f2937">运行 temp_monitor.py</text>
+  <text x="890" y="342" text-anchor="middle" font-size="11" fill="#6b7280">pip install pyserial</text>
+
+  <!-- 连线 -->
+  <line x1="320" y1="250" x2="440" y2="250" stroke="#6b7280" stroke-width="1" marker-end="url(#arw)"/>
+  <text x="380" y="242" text-anchor="middle" font-size="10" fill="#6b7280">SPI</text>
+  <line x1="320" y1="198" x2="790" y2="178" stroke="#6b7280" stroke-width="1" marker-end="url(#arw)"/>
+  <text x="560" y="188" text-anchor="middle" font-size="10" fill="#6b7280">USART1_TX (PA9)</text>
+  <line x1="990" y1="220" x2="990" y2="250" stroke="#6b7280" stroke-width="1" marker-end="url(#arw)"/>
+
+  <!-- ==================== 方案 B ==================== -->
+  <rect x="40" y="420" width="980" height="340" rx="10" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="60" y="452" font-size="15" font-weight="600" fill="#334155">方案 B：成品「NRF24L01 无线串口模块」（UART，收发成对）</text>
+  <text x="60" y="472" font-size="11" fill="#6b7280">模块内部自带主控，直接输出串口；无需第二块开发板。注意：监测端也要换成同型号模块</text>
+
+  <!-- 无线串口模块 -->
+  <rect x="80" y="490" width="300" height="240" rx="8" fill="#eef2ff" stroke="#6366f1"/>
+  <text x="230" y="514" text-anchor="middle" font-size="14" font-weight="600" fill="#3730a3">无线串口模块（接收）</text>
+  <text x="230" y="536" text-anchor="middle" font-size="11" fill="#6b7280">成品收发对，半双工透传</text>
+  <text x="95" y="564" font-size="11" fill="#1f2937">VCC → 3.3V 或 5V（看模块标注）</text>
+  <text x="95" y="586" font-size="11" fill="#1f2937">GND → GND</text>
+  <text x="95" y="608" font-size="11" fill="#1f2937">TX → USB-TTL 的 RX</text>
+  <text x="95" y="630" font-size="11" fill="#1f2937">RX ← USB-TTL 的 TX（可选）</text>
+  <text x="95" y="660" font-size="11" fill="#6b7280">用配套工具设置：</text>
+  <text x="95" y="680" font-size="11" fill="#6b7280">频道 76 / 1Mbps / 地址</text>
+  <text x="95" y="700" font-size="11" fill="#6b7280">12 34 56 78 9A / 16B</text>
+
+  <!-- USB-TTL -->
+  <rect x="500" y="490" width="200" height="100" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="600" y="514" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">USB 转串口</text>
+  <text x="600" y="536" text-anchor="middle" font-size="11" fill="#1f2937">RX ← 模块 TX</text>
+  <text x="600" y="556" text-anchor="middle" font-size="11" fill="#1f2937">TX → 模块 RX（可选）</text>
+  <text x="600" y="578" text-anchor="middle" font-size="11" fill="#6b7280">GND 共地</text>
+
+  <!-- 电脑 -->
+  <rect x="760" y="490" width="220" height="120" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="870" y="518" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">电脑</text>
+  <text x="870" y="540" text-anchor="middle" font-size="11" fill="#1f2937">运行 temp_monitor.py</text>
+  <text x="870" y="560" text-anchor="middle" font-size="11" fill="#6b7280">选择对应 COM 口</text>
+
+  <line x1="380" y1="598" x2="500" y2="540" stroke="#6b7280" stroke-width="1" marker-end="url(#arw)"/>
+  <line x1="700" y1="540" x2="760" y2="540" stroke="#6b7280" stroke-width="1" marker-end="url(#arw)"/>
+
+  <text x="530" y="800" text-anchor="middle" font-size="12" fill="#6b7280">方案 A 复用本工程代码（NRF_ROLE_RECEIVER）；方案 B 监测端需改为 UART 接模块</text>
+</svg>
