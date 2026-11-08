@@ -5,8 +5,10 @@
 
 #define NRF24L01_PAYLOAD   16      /* 负载长度（字节） */
 
-uint8_t NRF24L01_Init(void);                   /* 初始化，返回 0 成功 */
-void NRF24L01_Send(uint8_t *data, uint8_t len); /* 发送一帧 */
-uint8_t NRF24L01_Test(void);                   /* 通信测试，返回 0 正常 */
+uint8_t NRF24L01_Init(void);                          /* 发送模式初始化，返回 0 成功 */
+void    NRF24L01_Send(uint8_t *data, uint8_t len);    /* 发送一帧 */
+uint8_t NRF24L01_InitRX(void);                        /* 接收模式初始化，返回 0 成功 */
+uint8_t NRF24L01_Receive(uint8_t *data, uint8_t len); /* 接收一帧，返回 1 成功 */
+uint8_t NRF24L01_Test(void);                          /* 通信测试，返回 0 正常 */
 
 #endif

@@ -10,6 +10,45 @@
 #include "DAC_Output.h"
 #include "Tick.h"
 
+/*==================== 角色配置 ====================*/
+/* 同一工程两种角色：
+   监测端（STM32 + 传感器 + 发送）      -> NRF_ROLE_MONITOR
+   接收端（第二块开发板 + 接收 + 串口）  -> NRF_ROLE_RECEIVER
+   下载到哪块板子就改成对应的角色 */
+#define NRF_ROLE_MONITOR    0
+#define NRF_ROLE_RECEIVER   1
+#define NRF_ROLE            NRF_ROLE_MONITOR
+
+#if (NRF_ROLE == NRF_ROLE_RECEIVER)
+
+/*==================== 接收端：NRF24L01 接收 -> 串口 -> 电脑 ====================*/
+int main(void)
+{
+	uint8_t data[NRF24L01_PAYLOAD];
+	uint8_t i;
+
+	USART1_Init();
+	if (NRF24L01_InitRX() != 0)
+	{
+		USART1_SendString("NRF24L01 init failed\r\n");
+	}
+
+	while (1)
+	{
+		if (NRF24L01_Receive(data, NRF24L01_PAYLOAD))
+		{
+			for (i = 0; i < NRF24L01_PAYLOAD; i++)
+			{
+				USART1_SendByte(data[i]);
+			}
+		}
+	}
+}
+
+#else
+
+/*==================== 监测端 ====================*/
+
 /*==================== 参数配置 ====================*/
 #define TEMP_LOW_MIN     0.0f
 #define TEMP_LOW_MAX     59.0f
@@ -531,3 +570,5 @@ int main(void)
 		Status_LED();
 	}
 }
+
+#endif /* NRF_ROLE */

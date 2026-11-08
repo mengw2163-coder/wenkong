@@ -35,8 +35,10 @@ static const uint8_t NRF_ADDR[5] = {0x12, 0x34, 0x56, 0x78, 0x9A};
 /* 命令 */
 #define NRF_CMD_R_REGISTER   0x00
 #define NRF_CMD_W_REGISTER   0x20
+#define NRF_CMD_R_RX_PAYLOAD 0x61
 #define NRF_CMD_W_TX_PAYLOAD 0xA0
 #define NRF_CMD_FLUSH_TX     0xE1
+#define NRF_CMD_FLUSH_RX     0xE2
 #define NRF_CMD_NOP          0xFF
 
 /* 状态位 */
@@ -85,10 +87,9 @@ static void NRF_WriteBuf(uint8_t reg, uint8_t *buf, uint8_t len)
 }
 
 /**
-  * @brief  NRF24L01 初始化（发送模式）
-  * @retval 0 成功；1 失败
+  * @brief  GPIO 与 SPI2 初始化
   */
-uint8_t NRF24L01_Init(void)
+static void NRF_PortInit(void)
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
 	SPI_InitTypeDef SPI_InitStructure;
@@ -124,6 +125,15 @@ uint8_t NRF24L01_Init(void)
 	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);				//CSN 拉高（空闲）
 	GPIO_ResetBits(NRF_CE_GPIO, NRF_CE_PIN);				//CE 拉低（待机）
 	Delay_ms(20);											//上电延时
+}
+
+/**
+  * @brief  NRF24L01 初始化（发送模式）
+  * @retval 0 成功；1 失败
+  */
+uint8_t NRF24L01_Init(void)
+{
+	NRF_PortInit();
 
 	NRF_WriteReg(NRF_REG_EN_AA, 0x01);						//通道 0 自动应答
 	NRF_WriteReg(NRF_REG_EN_RXADDR, 0x01);					//使能通道 0
@@ -141,6 +151,30 @@ uint8_t NRF24L01_Init(void)
 }
 
 /**
+  * @brief  NRF24L01 初始化（接收模式）
+  * @retval 0 成功；1 失败
+  */
+uint8_t NRF24L01_InitRX(void)
+{
+	NRF_PortInit();
+
+	NRF_WriteReg(NRF_REG_EN_AA, 0x01);						//通道 0 自动应答
+	NRF_WriteReg(NRF_REG_EN_RXADDR, 0x01);					//使能接收通道 0
+	NRF_WriteReg(NRF_REG_SETUP_AW, 0x03);					//5 字节地址
+	NRF_WriteReg(NRF_REG_SETUP_RETR, 0x1A);
+	NRF_WriteReg(NRF_REG_RF_CH, NRF_CHANNEL);
+	NRF_WriteReg(NRF_REG_RF_SETUP, 0x07);					//1 Mbps，0 dBm
+	NRF_WriteReg(NRF_REG_RX_PW_P0, NRF_PAYLOAD);			//负载 16 字节
+	NRF_WriteBuf(NRF_REG_RX_ADDR_P0, (uint8_t *)NRF_ADDR, 5);
+	NRF_WriteBuf(NRF_REG_TX_ADDR, (uint8_t *)NRF_ADDR, 5);	//自动应答也要 TX 地址
+	NRF_WriteReg(NRF_REG_CONFIG, 0x0F);					//RX 模式，上电，CRC 2 字节
+	Delay_ms(2);
+	GPIO_SetBits(NRF_CE_GPIO, NRF_CE_PIN);					//CE 拉高，进入接收
+
+	return NRF24L01_Test();
+}
+
+/**
   * @brief  通信测试：读回 CONFIG 寄存器
   * @retval 0 正常；1 异常
   */
@@ -148,7 +182,7 @@ uint8_t NRF24L01_Test(void)
 {
 	uint8_t cfg = NRF_ReadReg(NRF_REG_CONFIG);
 
-	if (cfg == 0x0E)
+	if (cfg == 0x0E || cfg == 0x0F)
 	{
 		return 0;
 	}
@@ -183,4 +217,39 @@ void NRF24L01_Send(uint8_t *data, uint8_t len)
 		}
 	}
 	NRF_WriteReg(NRF_REG_STATUS, NRF_ST_TX_DS);				//清除标志
+}
+
+/**
+  * @brief  接收一帧数据
+  * @retval 1 收到数据；0 没有数据
+  */
+uint8_t NRF24L01_Receive(uint8_t *data, uint8_t len)
+{
+	uint8_t status;
+
+	if (len > NRF_PAYLOAD)
+	{
+		len = NRF_PAYLOAD;
+	}
+
+	status = NRF_ReadReg(NRF_REG_STATUS);
+	if ((status & NRF_ST_RX_DR) == 0)						//无接收数据
+	{
+		return 0;
+	}
+
+	GPIO_ResetBits(NRF_CSN_GPIO, NRF_CSN_PIN);				//读负载
+	SPI2_WriteByte(NRF_CMD_R_RX_PAYLOAD);
+	{
+		uint8_t i;
+		for (i = 0; i < len; i++)
+		{
+			data[i] = SPI2_WriteByte(NRF_CMD_NOP);
+		}
+	}
+	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
+
+	NRF_WriteReg(NRF_REG_STATUS, NRF_ST_RX_DR);				//清除接收标志
+	NRF_WriteReg(NRF_CMD_FLUSH_RX, NRF_CMD_NOP);
+	return 1;
 }
