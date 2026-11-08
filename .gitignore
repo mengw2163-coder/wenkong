@@ -1,0 +1,26 @@
+# Keil MDK 构建产物
+Objects/
+Listings/
+DebugConfig/
+*.uvguix.*
+*.uvoptx
+*.bak
+*.tmp
+*.log
+*.dep
+*.crf
+*.d
+*.o
+*.axf
+*.hex
+*.map
+*.lnp
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# MiMoCode 内部目录
+.mimocode/
