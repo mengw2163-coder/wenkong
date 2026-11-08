@@ -6,6 +6,7 @@
 #include "DS18B20.h"
 #include "Buzzer.h"
 #include "USART.h"
+#include "NRF24L01.h"
 #include "DAC_Output.h"
 #include "Tick.h"
 
@@ -36,13 +37,12 @@ static void Show_Int(uint8_t Line, uint8_t Col, int16_t v);
 static void Show_Main(void);
 static void Show_Set(void);
 static uint8_t Key_GetEvent(void);
-static uint8_t U16ToStr(uint16_t v, char *buf);
 static int16_t StrToInt(const char *s);
 static void Limit_Params(void);
 static void Temp_Task(void);
 static void Alarm_Task(void);
 static void Display_Task(void);
-static void Report_Task(void);
+static void NRF24L01_Report_Task(void);
 static void Command_Task(void);
 static void Alarm_Output(void);
 static void Status_LED(void);
@@ -239,28 +239,6 @@ static uint8_t Key_GetEvent(void)
 }
 
 /*==================== 字符串/数字转换 ====================*/
-static uint8_t U16ToStr(uint16_t v, char *buf)
-{
-	uint8_t i = 0, j = 0;
-	char tmp[8];
-
-	if (v == 0)
-	{
-		buf[0] = '0';
-		return 1;
-	}
-	while (v > 0)
-	{
-		tmp[j++] = (char)('0' + (v % 10));
-		v /= 10;
-	}
-	while (j > 0)
-	{
-		buf[i++] = tmp[--j];
-	}
-	return i;
-}
-
 static int16_t StrToInt(const char *s)
 {
 	int16_t v = 0;
@@ -355,13 +333,25 @@ static void Display_Task(void)
 	}
 }
 
-/*==================== 任务：上报 ====================*/
-static void Report_Task(void)
+/*==================== 任务：NRF24L01 上报 ====================*/
+/*
+ * 负载格式（16 字节，小端）：
+ *  [0]    0xAA   帧头
+ *  [1]    0x55   帧头
+ *  [2-3]  int16  温度 × 10
+ *  [4]    uint8  报警状态
+ *  [5-6]  int16  温度下限
+ *  [7-8]  int16  温度上限
+ *  [9-10] int16  输出电压 × 100
+ *  [11]   uint8  校验和（[0..10] 异或）
+ *  [12-15] 保留
+ */
+static void NRF24L01_Report_Task(void)
 {
 	static uint32_t last = 0;
-	char buf[48];
-	uint8_t n = 0;
-	int16_t t10, dp;
+	uint8_t packet[NRF24L01_PAYLOAD];
+	int16_t t10, tl, th, v100;
+	uint8_t i, sum;
 
 	if (millis() - last < REPORT_INTERVAL)
 	{
@@ -369,65 +359,38 @@ static void Report_Task(void)
 	}
 	last = millis();
 
-	buf[n++] = 'T';
-	buf[n++] = ':';
-	t10 = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
-	if (t10 < 0)
+	t10  = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
+	tl   = (int16_t)g_tempLow;
+	th   = (int16_t)g_tempHigh;
+	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);
+
+	packet[0]  = 0xAA;
+	packet[1]  = 0x55;
+	packet[2]  = (uint8_t)(t10 & 0xFF);
+	packet[3]  = (uint8_t)((t10 >> 8) & 0xFF);
+	packet[4]  = g_alarm;
+	packet[5]  = (uint8_t)(tl & 0xFF);
+	packet[6]  = (uint8_t)((tl >> 8) & 0xFF);
+	packet[7]  = (uint8_t)(th & 0xFF);
+	packet[8]  = (uint8_t)((th >> 8) & 0xFF);
+	packet[9]  = (uint8_t)(v100 & 0xFF);
+	packet[10] = (uint8_t)((v100 >> 8) & 0xFF);
+
+	sum = 0;
+	for (i = 0; i < 11; i++)
 	{
-		buf[n++] = '-';
-		t10 = -t10;
+		sum ^= packet[i];
 	}
-	n += U16ToStr((uint16_t)(t10 / 10), buf + n);
-	dp = (int16_t)(t10 % 10);
-	buf[n++] = '.';
-	buf[n++] = (char)('0' + dp);
+	packet[11] = sum;
+	packet[12] = 0;
+	packet[13] = 0;
+	packet[14] = 0;
+	packet[15] = 0;
 
-	buf[n++] = ',';
-	buf[n++] = 'A';
-	buf[n++] = ':';
-	buf[n++] = (char)('0' + g_alarm);
-
-	buf[n++] = ',';
-	buf[n++] = 'T';
-	buf[n++] = 'L';
-	buf[n++] = ':';
-	n += U16ToStr((uint16_t)g_tempLow, buf + n);
-
-	buf[n++] = ',';
-	buf[n++] = 'T';
-	buf[n++] = 'H';
-	buf[n++] = ':';
-	n += U16ToStr((uint16_t)g_tempHigh, buf + n);
-
-	buf[n++] = ',';
-	buf[n++] = 'V';
-	buf[n++] = ':';
-	{
-		int16_t v100;
-		float v = DAC_Output_GetVoltage(g_temp);
-		if (v < 0.0f) v = 0.0f;
-		v100 = (int16_t)(v * 100.0f + 0.5f);
-		n += U16ToStr((uint16_t)(v100 / 100), buf + n);
-		buf[n++] = '.';
-		if (v100 % 100 < 10)
-		{
-			buf[n++] = '0';
-			buf[n++] = (char)('0' + v100 % 10);
-		}
-		else
-		{
-			n += U16ToStr((uint16_t)(v100 % 100), buf + n);
-		}
-	}
-
-	buf[n++] = '\r';
-	buf[n++] = '\n';
-	buf[n] = '\0';
-
-	USART1_SendString(buf);
+	NRF24L01_Send(packet, NRF24L01_PAYLOAD);
 }
 
-/*==================== 任务：串口命令 ====================*/
+/*==================== 任务：串口命令（USB-TTL 本地设置） ====================*/
 static void Command_Task(void)
 {
 	static char line[32];
@@ -511,6 +474,7 @@ int main(void)
 	DS18B20_Init();
 	Buzzer_Init();
 	USART1_Init();
+	NRF24L01_Init();
 	DAC_Output_Init();
 	Tick_Init();
 
@@ -525,7 +489,7 @@ int main(void)
 		Temp_Task();
 		Alarm_Task();
 		Display_Task();
-		Report_Task();
+		NRF24L01_Report_Task();
 		Command_Task();
 
 		switch (Key_GetEvent())
