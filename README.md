@@ -47,14 +47,15 @@
 
 ```mermaid
 flowchart LR
-    subgraph MONITOR[监测端]
+    subgraph MONITOR[监测端 STM32F103C8T6]
+        direction TB
         MCU[STM32F103C8T6]
-        SENSOR[DS18B20<br/>PB10]
-        OLED[OLED<br/>PB8/PB9]
-        KEY[按键<br/>PB1/PB11]
-        ALARM[蜂鸣器 PB0<br/>LED PA1/PA2]
+        SENSOR[DS18B20 PB10]
+        OLED[OLED PB8/PB9]
+        KEY[按键 PB1/PB11]
+        ALARM[蜂鸣器 PB0 / LED PA1,PA2]
         DAC[PWM 输出 PA6]
-        TX[NRF24L01 发送<br/>SPI2]
+        TX[NRF24L01 发送 SPI2]
         SENSOR --> MCU
         OLED --> MCU
         KEY --> MCU
@@ -63,18 +64,22 @@ flowchart LR
         MCU -->|SPI| TX
     end
 
-    TX ==>|2.4G 无线| RX[NRF24L01 接收]
+    TX ==>|2.4G 无线| FORK[接收端 二选一]
 
-    subgraph PC[接收端（电脑）]
-        direction TB
-        RXMCU[接收端主控<br/>第二块开发板]
-        APP[Python 上位机<br/>temp_monitor.py]
-        RX -->|SPI| RXMCU
-        RXMCU -->|USB 串口| APP
-    end
+    FORK -->|方案 A| RXA[NRF24L01 接收 SPI]
+    RXA --> A_MCU[第二块 STM32 开发板]
+    A_MCU -->|USART1 PA9| A_USB[USB 转串口]
+    A_USB --> PC[电脑 Python 上位机 temp_monitor.py]
+
+    FORK -->|方案 B| B_MOD[无线串口模块 UART]
+    B_MOD -->|TX/RX| B_USB[USB 转串口]
+    B_USB --> PC
 ```
 
 > ⚠️ NRF24L01 没有 WiFi，也不是串口设备。模块用 **SPI** 接主控；电脑那头的接收器负责把无线数据转到 **USB 串口**。
+>
+> **方案 A**（需第二块开发板）：接收端用另一块 STM32 + NRF24L01（SPI），跑本工程 `NRF_ROLE_RECEIVER` 固件，USART1 经 USB 串口连电脑。
+> **方案 B**（无需额外开发板）：直接用成品「NRF24L01 无线串口模块」（UART 接口），接收端那一半插 USB 串口即可；监测端需改为 UART 接模块。
 
 ### 3.2 监测端接线（STM32）
 
