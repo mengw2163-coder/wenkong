@@ -48,9 +48,24 @@ static const uint8_t NRF_ADDR[5] = {0x12, 0x34, 0x56, 0x78, 0x9A};
 
 static uint8_t SPI2_WriteByte(uint8_t byte)
 {
-	while (SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_TXE) == RESET);
+	uint16_t timeout = 0;
+
+	while (SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_TXE) == RESET)
+	{
+		if (++timeout > 1000)		//超时保护，避免外设异常时死等
+		{
+			return 0xFF;
+		}
+	}
 	SPI_I2S_SendData(SPI2, byte);
-	while (SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE) == RESET);
+	timeout = 0;
+	while (SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE) == RESET)
+	{
+		if (++timeout > 1000)
+		{
+			return 0xFF;
+		}
+	}
 	return (uint8_t)SPI_I2S_ReceiveData(SPI2);
 }
 
@@ -73,16 +88,30 @@ static void NRF_WriteReg(uint8_t reg, uint8_t value)
 	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
 }
 
-static void NRF_WriteBuf(uint8_t reg, uint8_t *buf, uint8_t len)
+/**
+  * @brief  发送一条命令 + 若干数据字节（用于写寄存器、写负载）
+  * @param  cmd  命令字节，例如 NRF_CMD_W_REGISTER | 寄存器地址
+  */
+static void NRF_WriteBuf(uint8_t cmd, uint8_t *buf, uint8_t len)
 {
 	uint8_t i;
 
 	GPIO_ResetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
-	SPI2_WriteByte(reg);
+	SPI2_WriteByte(cmd);
 	for (i = 0; i < len; i++)
 	{
 		SPI2_WriteByte(buf[i]);
 	}
+	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
+}
+
+/**
+  * @brief  清空接收 FIFO
+  */
+static void NRF_FlushRX(void)
+{
+	GPIO_ResetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
+	SPI2_WriteByte(NRF_CMD_FLUSH_RX);
 	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
 }
 
@@ -142,8 +171,8 @@ uint8_t NRF24L01_Init(void)
 	NRF_WriteReg(NRF_REG_RF_CH, NRF_CHANNEL);				//频道 76
 	NRF_WriteReg(NRF_REG_RF_SETUP, 0x07);					//1 Mbps，0 dBm
 	NRF_WriteReg(NRF_REG_RX_PW_P0, NRF_PAYLOAD);			//负载 16 字节
-	NRF_WriteBuf(NRF_REG_RX_ADDR_P0, (uint8_t *)NRF_ADDR, 5);
-	NRF_WriteBuf(NRF_REG_TX_ADDR, (uint8_t *)NRF_ADDR, 5);
+	NRF_WriteBuf(NRF_CMD_W_REGISTER | NRF_REG_RX_ADDR_P0, (uint8_t *)NRF_ADDR, 5);
+	NRF_WriteBuf(NRF_CMD_W_REGISTER | NRF_REG_TX_ADDR, (uint8_t *)NRF_ADDR, 5);
 	NRF_WriteReg(NRF_REG_CONFIG, 0x0E);					//TX 模式，上电，CRC 2 字节
 	Delay_ms(2);
 
@@ -165,8 +194,8 @@ uint8_t NRF24L01_InitRX(void)
 	NRF_WriteReg(NRF_REG_RF_CH, NRF_CHANNEL);
 	NRF_WriteReg(NRF_REG_RF_SETUP, 0x07);					//1 Mbps，0 dBm
 	NRF_WriteReg(NRF_REG_RX_PW_P0, NRF_PAYLOAD);			//负载 16 字节
-	NRF_WriteBuf(NRF_REG_RX_ADDR_P0, (uint8_t *)NRF_ADDR, 5);
-	NRF_WriteBuf(NRF_REG_TX_ADDR, (uint8_t *)NRF_ADDR, 5);	//自动应答也要 TX 地址
+	NRF_WriteBuf(NRF_CMD_W_REGISTER | NRF_REG_RX_ADDR_P0, (uint8_t *)NRF_ADDR, 5);
+	NRF_WriteBuf(NRF_CMD_W_REGISTER | NRF_REG_TX_ADDR, (uint8_t *)NRF_ADDR, 5);	//自动应答也要 TX 地址
 	NRF_WriteReg(NRF_REG_CONFIG, 0x0F);					//RX 模式，上电，CRC 2 字节
 	Delay_ms(2);
 	GPIO_SetBits(NRF_CE_GPIO, NRF_CE_PIN);					//CE 拉高，进入接收
@@ -250,6 +279,6 @@ uint8_t NRF24L01_Receive(uint8_t *data, uint8_t len)
 	GPIO_SetBits(NRF_CSN_GPIO, NRF_CSN_PIN);
 
 	NRF_WriteReg(NRF_REG_STATUS, NRF_ST_RX_DR);				//清除接收标志
-	NRF_WriteReg(NRF_CMD_FLUSH_RX, NRF_CMD_NOP);
+	NRF_FlushRX();
 	return 1;
 }

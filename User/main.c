@@ -66,7 +66,9 @@ int main(void)
 static float   g_tempLow  = 20.0f;		//温度下限
 static float   g_tempHigh = 60.0f;		//温度上限
 static float   g_temp     = 0.0f;		//当前温度
+static uint8_t g_tempValid = 0;			//0 还没拿到有效温度；1 已拿到
 static uint8_t g_alarm    = 0;			//0 正常；1 报警
+static uint8_t g_nrfOk    = 0;			//0 NRF24L01 初始化失败；1 正常
 static uint8_t g_setField = 0;			//0 监测；1 设置下限；2 设置上限
 
 /*==================== 函数原型 ====================*/
@@ -174,7 +176,14 @@ static void Show_Int(uint8_t Line, uint8_t Col, int16_t v)
 static void Show_Main(void)
 {
 	OLED_ShowString(1, 1, "T:");
-	Show_Temp(1, 3, g_temp);
+	if (g_tempValid)
+	{
+		Show_Temp(1, 3, g_temp);
+	}
+	else
+	{
+		OLED_ShowString(1, 3, "--.-");
+	}
 	OLED_ShowString(1, 8, "C");
 
 	OLED_ShowString(2, 1, "L:");
@@ -183,12 +192,23 @@ static void Show_Main(void)
 	Show_Int(2, 8, (int16_t)g_tempHigh);
 
 	OLED_ShowString(3, 1, "V:");
-	Show_Volt(3, 3, DAC_Output_GetVoltage(g_temp));
+	if (g_tempValid)
+	{
+		Show_Volt(3, 3, DAC_Output_GetVoltage(g_temp));
+	}
+	else
+	{
+		OLED_ShowString(3, 3, "--.--");
+	}
 	OLED_ShowString(3, 7, "V");
 
 	if (g_alarm)
 	{
 		OLED_ShowString(4, 1, "ALARM!");
+	}
+	else if (!g_nrfOk)
+	{
+		OLED_ShowString(4, 1, "NRF ERR");
 	}
 	else
 	{
@@ -199,7 +219,14 @@ static void Show_Main(void)
 static void Show_Set(void)
 {
 	OLED_ShowString(1, 1, "T:");
-	Show_Temp(1, 3, g_temp);
+	if (g_tempValid)
+	{
+		Show_Temp(1, 3, g_temp);
+	}
+	else
+	{
+		OLED_ShowString(1, 3, "--.-");
+	}
 	OLED_ShowString(1, 8, "C");
 
 	OLED_ShowString(2, 1, "L:");
@@ -329,6 +356,7 @@ static void Temp_Task(void)
 		if (t > -50.0f)
 		{
 			g_temp = t;
+			g_tempValid = 1;
 		}
 		state = 0;
 	}
@@ -337,6 +365,11 @@ static void Temp_Task(void)
 /*==================== 任务：报警判断 ====================*/
 static void Alarm_Task(void)
 {
+	if (!g_tempValid)							//还没拿到有效温度，不判报警
+	{
+		return;
+	}
+
 	if (g_alarm == 0)
 	{
 		if (g_temp > g_tempHigh || g_temp < g_tempLow)
@@ -513,7 +546,7 @@ int main(void)
 	DS18B20_Init();
 	Buzzer_Init();
 	USART1_Init();
-	NRF24L01_Init();
+	g_nrfOk = (NRF24L01_Init() == 0);			//结果用于显示提示
 	DAC_Output_Init();
 	Tick_Init();
 

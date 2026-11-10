@@ -8,7 +8,7 @@ static volatile uint16_t s_rxHead = 0;
 static volatile uint16_t s_rxTail = 0;
 
 /**
-  * @brief  USART1 初始化（PA9 TX / PA10 RX），接 ESP8266
+  * @brief  USART1 初始化（PA9 TX / PA10 RX），接 USB-TTL 连电脑
   */
 void USART1_Init(void)
 {
@@ -53,6 +53,7 @@ void USART1_SendByte(uint8_t byte)
 {
 	USART_SendData(USART1, byte);
 	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);	//等最后一个字节发完
 }
 
 /**
@@ -106,5 +107,11 @@ void USART1_RxHandler(void)
 			s_rxBuf[s_rxHead] = data;
 			s_rxHead = next;
 		}
+	}
+
+	/* 溢出错误：清 ORE，否则中断会一直触发 */
+	if (USART_GetFlagStatus(USART1, USART_FLAG_ORE) != RESET)
+	{
+		(void)USART_ReceiveData(USART1);
 	}
 }

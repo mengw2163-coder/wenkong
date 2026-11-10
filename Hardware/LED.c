@@ -1,5 +1,7 @@
 #include "stm32f10x.h"                  // Device header
 
+/* 接法：PA1/PA2 → 限流电阻 → LED 阳极，LED 阴极接地，故高电平点亮 */
+
 /**
   * 函    数：LED初始化
   * 参    数：无
@@ -18,7 +20,7 @@ void LED_Init(void)
 	GPIO_Init(GPIOA, &GPIO_InitStructure);						//将PA1和PA2引脚初始化为推挽输出
 	
 	/*设置GPIO初始化后的默认电平*/
-	GPIO_SetBits(GPIOA, GPIO_Pin_1 | GPIO_Pin_2);				//设置PA1和PA2引脚为高电平
+	GPIO_ResetBits(GPIOA, GPIO_Pin_1 | GPIO_Pin_2);			//设置PA1和PA2引脚为低电平（默认熄灭）
 }
 
 /**
@@ -28,7 +30,7 @@ void LED_Init(void)
   */
 void LED1_ON(void)
 {
-	GPIO_ResetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为低电平
+	GPIO_SetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为高电平（点亮）
 }
 
 /**
@@ -38,7 +40,7 @@ void LED1_ON(void)
   */
 void LED1_OFF(void)
 {
-	GPIO_SetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为高电平
+	GPIO_ResetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为低电平（熄灭）
 }
 
 /**
@@ -65,7 +67,7 @@ void LED1_Turn(void)
   */
 void LED2_ON(void)
 {
-	GPIO_ResetBits(GPIOA, GPIO_Pin_2);		//设置PA2引脚为低电平
+	GPIO_SetBits(GPIOA, GPIO_Pin_2);		//设置PA2引脚为高电平（点亮）
 }
 
 /**
@@ -75,7 +77,7 @@ void LED2_ON(void)
   */
 void LED2_OFF(void)
 {
-	GPIO_SetBits(GPIOA, GPIO_Pin_2);		//设置PA2引脚为高电平
+	GPIO_ResetBits(GPIOA, GPIO_Pin_2);		//设置PA2引脚为低电平（熄灭）
 }
 
 /**

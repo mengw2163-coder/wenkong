@@ -88,10 +88,12 @@ flowchart LR
 | DS18B20 DQ | PB10 | 1-Wire，开漏输出，需 4.7 kΩ 上拉到 VCC |
 | OLED SCL / SDA | PB8 / PB9 | 软件 I²C |
 | 按键 Key1 / Key2 | PB1 / PB11 | 上拉输入，低电平有效 |
-| 蜂鸣器 | PB0 | 有源蜂鸣器；低电平触发改 `Buzzer.c` 的 `BUZZER_ON_LEVEL` |
-| LED1 / LED2 | PA1 / PA2 | 报警灯 / 状态灯，低电平点亮 |
+| 蜂鸣器 | PB0 | 有源蜂鸣器，经 S8050 驱动，**高电平触发**（`Buzzer.c` 的 `BUZZER_ON_LEVEL`） |
+| LED1 / LED2 | PA1 / PA2 | 报警灯 / 状态灯，**高电平点亮**（阳极接 PA1/PA2，阴极接地） |
 | PWM 输出 | PA6 | → R10 kΩ → C100 nF → GND，输出 0~3.3 V |
 | USART1 TX / RX | PA9 / PA10 | USB-TTL，本地设阈值/调试（可选） |
+
+> 注：PA1/PA2 复用了 USART2 的 RTS/TX，PB10/PB11 复用 USART3 的 TX/RX，PB6 复用 USART1 重映射 TX；本工程只使用 USART1（PA9/PA10）做本地调试，不受影响。
 
 ### 3.3 NRF24L01 接线（重点）
 
@@ -263,5 +265,6 @@ wenkong/
 ## 9. 备注
 
 - **E2 扩展**：当前硬件输出 0~3.3 V；如需 0~10 V，在 PA6 与输出端之间加同相放大电路（增益≈3.03，12 V 供电），软件调用 `DAC_Output_SetMap(tLow, tHigh, vLow, vHigh)` 即可。
+- **阈值掉电丢失**：`g_tempLow/g_tempHigh` 存于 RAM，复位后恢复 20/60 ℃（F103C8 无 EEPROM，未做掉电保存）。
 - **DS18B20 时序**：1-Wire 对时序敏感，关键时序使用 `Delay_us`。
 - **NRF24L01 参数**：频道 76、1 Mbps、0 dBm、地址 `{0x12,0x34,0x56,0x78,0x9A}`、负载 16 字节。

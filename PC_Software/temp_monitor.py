@@ -38,8 +38,8 @@ except ImportError:          # 非 Windows 平台没有 winsound
 PAYLOAD_LEN = 16
 
 
-def to_int16(hi, lo):
-    """两个字节（小端）转有符号 16 位整数"""
+def to_int16(lo, hi):
+    """两个字节（小端：低字节在前）转有符号 16 位整数"""
     v = lo | (hi << 8)
     return v - 0x10000 if v >= 0x8000 else v
 
@@ -58,11 +58,11 @@ def parse_packet(data):
         return None
 
     return {
-        "temp": to_int16(data[3], data[2]) / 10.0,
+        "temp": to_int16(data[2], data[3]) / 10.0,
         "alarm": data[4],
-        "tl": to_int16(data[6], data[5]),
-        "th": to_int16(data[8], data[7]),
-        "volt": to_int16(data[10], data[9]) / 100.0,
+        "tl": to_int16(data[5], data[6]),
+        "th": to_int16(data[7], data[8]),
+        "volt": to_int16(data[9], data[10]) / 100.0,
     }
 
 
@@ -187,12 +187,14 @@ class App:
         self.last_label.config(text=f"最后更新：{time.strftime('%H:%M:%S')}")
 
         if d["alarm"]:
+            self.temp_label.config(fg="#dc2626")
             self.status_label.config(text="⚠ 报警中", fg="#ffffff", bg="#ef4444")
             self.root.configure(background="#fee2e2")
             if not self.was_alarm and winsound:
                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
             self.was_alarm = True
         else:
+            self.temp_label.config(fg="#1f2937")
             self.status_label.config(text="● 正常", fg="#15803d", bg="#dcfce7")
             self.root.configure(background="#f0f2f5")
             self.was_alarm = False
