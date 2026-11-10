@@ -1,9 +1,13 @@
 #include "stm32f10x.h"
 #include "OLED_Font.h"
+#include "Delay.h"
 
 /*引脚配置*/
 #define OLED_W_SCL(x)		GPIO_WriteBit(GPIOB, GPIO_Pin_8, (BitAction)(x))
 #define OLED_W_SDA(x)		GPIO_WriteBit(GPIOB, GPIO_Pin_9, (BitAction)(x))
+
+/*I2C 从机地址：0x78 = 0x3C（多数模块）；若你的模块是 0x3D，改成 0x7A*/
+#define OLED_I2C_ADDR   0x78
 
 /*引脚初始化*/
 void OLED_I2C_Init(void)
