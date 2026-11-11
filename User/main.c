@@ -6,6 +6,7 @@
 #include "DS18B20.h"
 #include "Buzzer.h"
 #include "USART.h"
+#include "Serial.h"
 #include "NRF24L01.h"
 #include "DAC_Output.h"
 #include "Tick.h"
@@ -61,6 +62,7 @@ int main(void)
 #define BEEP_INTERVAL    200      /* 报警声光切换间隔（ms） */
 #define KEY_DEBOUNCE_MS  10       /* 按键去抖（ms） */
 #define KEY_LONG_MS      800      /* 长按阈值（ms） */
+#define KEY_REPEAT_MS    150      /* 长按重复间隔（ms） */
 
 /*==================== 全局变量 ====================*/
 static float   g_tempLow  = 20.0f;		//温度下限
@@ -78,13 +80,12 @@ static void Show_Int(uint8_t Line, uint8_t Col, int16_t v);
 static void Show_Main(void);
 static void Show_Set(void);
 static uint8_t Key_GetEvent(void);
-static int16_t StrToInt(const char *s);
 static void Limit_Params(void);
 static void Temp_Task(void);
 static void Alarm_Task(void);
 static void Display_Task(void);
-static void NRF24L01_Report_Task(void);
-static void Command_Task(void);
+//static void NRF24L01_Report_Task(void);
+static void Serial_Report_Task(void);
 static void Alarm_Output(void);
 static void Status_LED(void);
 
@@ -260,6 +261,7 @@ static uint8_t Key_GetEvent(void)
 	static uint8_t lastStable = 0;
 	static uint32_t changeMs = 0;
 	static uint32_t pressMs = 0;
+	static uint32_t repeatMs = 0;
 	static uint8_t longFired = 0;
 	uint8_t raw = Key_Scan();
 	uint8_t evt = KEY_EVT_NONE;
@@ -285,6 +287,12 @@ static uint8_t Key_GetEvent(void)
 		else if (stableState == 2 && !longFired && millis() - pressMs >= KEY_LONG_MS)
 		{
 			longFired = 1;
+			repeatMs = millis();
+			evt = KEY2_LONG;
+		}
+		else if (stableState == 2 && longFired && millis() - repeatMs >= KEY_REPEAT_MS)
+		{
+			repeatMs = millis();
 			evt = KEY2_LONG;
 		}
 	}
@@ -302,21 +310,6 @@ static uint8_t Key_GetEvent(void)
 
 	lastStable = stableState;
 	return evt;
-}
-
-/*==================== 字符串/数字转换 ====================*/
-static int16_t StrToInt(const char *s)
-{
-	int16_t v = 0;
-	uint8_t neg = 0;
-
-	if (*s == '-') { neg = 1; s++; }
-	while (*s >= '0' && *s <= '9')
-	{
-		v = (int16_t)(v * 10 + (*s - '0'));
-		s++;
-	}
-	return neg ? -v : v;
 }
 
 /*==================== 参数限幅 ====================*/
@@ -358,6 +351,10 @@ static void Temp_Task(void)
 			g_temp = t;
 			g_tempValid = 1;
 		}
+		else
+		{
+			g_tempValid = 0;					//读取失败：显示 --.-，且不参与报警判断
+		}
 		state = 0;
 	}
 }
@@ -367,6 +364,7 @@ static void Alarm_Task(void)
 {
 	if (!g_tempValid)							//还没拿到有效温度，不判报警
 	{
+		g_alarm = 0;
 		return;
 	}
 
@@ -405,7 +403,8 @@ static void Display_Task(void)
 	}
 }
 
-/*==================== 任务：NRF24L01 上报 ====================*/
+/*==================== 任务：NRF24L01 上报（暂时停用，保留代码） ====================*/
+#if 0
 /*
  * 负载格式（16 字节，小端）：
  *  [0]    0xAA   帧头
@@ -461,47 +460,28 @@ static void NRF24L01_Report_Task(void)
 
 	NRF24L01_Send(packet, NRF24L01_PAYLOAD);
 }
+#endif
 
-/*==================== 任务：串口命令（USB-TTL 本地设置） ====================*/
-static void Command_Task(void)
+/*==================== 任务：串口上报（无线串口模块） ====================*/
+static void Serial_Report_Task(void)
 {
-	static char line[32];
-	static uint8_t idx = 0;
-	uint8_t c;
+	static uint32_t last = 0;
+	int16_t t10, tl, th, v100;
 
-	while (USART1_RxAvailable())
+	if (millis() - last < REPORT_INTERVAL)
 	{
-		c = USART1_GetRxByte();
-		if (c == '\r' || c == '\n')
-		{
-			line[idx] = '\0';
-			if (idx > 0)
-			{
-				if (line[0] == 'T' && line[1] == 'L' && line[2] == '=')
-				{
-					int16_t v = StrToInt(line + 3);
-					if (v >= TEMP_LOW_MIN && v <= TEMP_LOW_MAX)
-					{
-						g_tempLow = (float)v;
-					}
-				}
-				else if (line[0] == 'T' && line[1] == 'H' && line[2] == '=')
-				{
-					int16_t v = StrToInt(line + 3);
-					if (v >= TEMP_HIGH_MIN && v <= TEMP_HIGH_MAX)
-					{
-						g_tempHigh = (float)v;
-					}
-				}
-				Limit_Params();
-			}
-			idx = 0;
-		}
-		else if (idx < sizeof(line) - 1)
-		{
-			line[idx++] = (char)c;
-		}
+		return;
 	}
+	last = millis();
+
+	t10  = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
+	tl   = (int16_t)g_tempLow;
+	th   = (int16_t)g_tempHigh;
+	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);
+
+	Serial_Printf("T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d\r\n",
+	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,
+	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100);
 }
 
 /*==================== 报警输出 ====================*/
@@ -545,8 +525,10 @@ int main(void)
 	OLED_Init();
 	DS18B20_Init();
 	Buzzer_Init();
-	USART1_Init();
-	g_nrfOk = (NRF24L01_Init() == 0);			//结果用于显示提示
+	//USART1_Init();                        // 旧串口（RX 命令），暂时停用
+	Serial_Init();                          // 新串口（无线串口模块，TX）
+	//g_nrfOk = (NRF24L01_Init() == 0);     // NRF24L01 暂时停用
+	g_nrfOk = 1;
 	DAC_Output_Init();
 	Tick_Init();
 
@@ -561,8 +543,8 @@ int main(void)
 		Temp_Task();
 		Alarm_Task();
 		Display_Task();
-		NRF24L01_Report_Task();
-		Command_Task();
+		//NRF24L01_Report_Task();
+		Serial_Report_Task();                   // 无线串口模块上报
 
 		switch (Key_GetEvent())
 		{

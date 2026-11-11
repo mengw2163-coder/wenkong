@@ -21,32 +21,11 @@ void USART1_Init(void)
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;			//TX 复用推挽输出
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-	GPIO_Init(GPIOA, &GPIO_InitStructure);
+	GPIO_Init(GPIOA, &GPIO_InitStructure);【【=【-
 
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;	//RX 浮空输入
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
-	GPIO_Init(GPIOA, &GPIO_InitStructure);
-
-	USART_InitStructure.USART_BaudRate = 115200;
-	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
-	USART_InitStructure.USART_StopBits = USART_StopBits_1;
-	USART_InitStructure.USART_Parity = USART_Parity_No;
-	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
-	USART_InitStructure.USART_Mode = USART_Mode_Tx | USART_Mode_Rx;
-	USART_Init(USART1, &USART_InitStructure);
-
-	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);			//使能接收中断
-
-	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
-	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
-	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-	NVIC_Init(&NVIC_InitStructure);
-
-	USART_Cmd(USART1, ENABLE);
-}
-
-/**
+	GPIO_Init 
   * @brief  发送一个字节
   */
 void USART1_SendByte(uint8_t byte)

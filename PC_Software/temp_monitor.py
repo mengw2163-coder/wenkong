@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-智能温度监测报警器 —— 电脑接收端上位机
+智能温度监测报警器 —— 电脑接收端上位机（无线串口模块版）
 
-通过串口读取 NRF24L01 接收器转发的数据，实时显示温度、阈值、电压与报警状态。
+通过串口读取无线串口模块转发的文本数据，实时显示温度、阈值、电压与报警状态。
 报警时界面变红并发出提示音。
 
 依赖：pyserial
      pip install pyserial
 运行：python temp_monitor.py
 
-串口协议（16 字节二进制负载，与 STM32 端 NRF24L01 上报格式一致）：
-  [0]    0xAA   帧头
-  [1]    0x55   帧头
-  [2-3]  int16  温度 × 10（小端）
-  [4]    uint8  报警状态（0 正常 / 1 报警）
-  [5-6]  int16  温度下限
-  [7-8]  int16  温度上限
-  [9-10] int16  输出电压 × 100（小端）
-  [11]   uint8  校验和（[0..10] 异或）
-  [12-15] 保留
+串口协议（文本行，115200）：
+  T:25.3,A:0,TL:20,TH:60,V:1.65
+  T   温度（℃，1 位小数）
+  A   报警状态（0 正常 / 1 报警）
+  TL  温度下限
+  TH  温度上限
+  V   输出电压（V，2 位小数）
 """
 
 import threading
@@ -32,38 +29,33 @@ import serial.tools.list_ports
 
 try:
     import winsound
-except ImportError:          # 非 Windows 平台没有 winsound
+except ImportError:
     winsound = None
 
-PAYLOAD_LEN = 16
 
-
-def to_int16(lo, hi):
-    """两个字节（小端：低字节在前）转有符号 16 位整数"""
-    v = lo | (hi << 8)
-    return v - 0x10000 if v >= 0x8000 else v
-
-
-def parse_packet(data):
-    """解析 16 字节负载，失败返回 None"""
-    if len(data) != PAYLOAD_LEN:
+def parse_line(line):
+    """解析一行文本数据，失败返回 None"""
+    line = line.strip()
+    if not line:
         return None
-    if data[0] != 0xAA or data[1] != 0x55:
+    data = {}
+    for item in line.split(','):
+        if ':' not in item:
+            continue
+        key, val = item.split(':', 1)
+        data[key.strip()] = val.strip()
+    if 'T' not in data:
         return None
-
-    checksum = 0
-    for b in data[:11]:
-        checksum ^= b
-    if checksum != data[11]:
+    try:
+        return {
+            "temp": float(data.get("T", "0")),
+            "alarm": int(float(data.get("A", "0"))),
+            "tl": int(float(data.get("TL", "0"))),
+            "th": int(float(data.get("TH", "0"))),
+            "volt": float(data.get("V", "0")),
+        }
+    except ValueError:
         return None
-
-    return {
-        "temp": to_int16(data[2], data[3]) / 10.0,
-        "alarm": data[4],
-        "tl": to_int16(data[5], data[6]),
-        "th": to_int16(data[7], data[8]),
-        "volt": to_int16(data[9], data[10]) / 100.0,
-    }
 
 
 class App:
@@ -152,29 +144,17 @@ class App:
         self.root.configure(background="#f0f2f5")
 
     def read_loop(self):
-        buf = bytearray()
+        buf = ""
         while self.running:
             try:
                 chunk = self.ser.read(64)
             except Exception:
                 break
             if chunk:
-                buf.extend(chunk)
-                while len(buf) >= PAYLOAD_LEN:
-                    idx = -1
-                    for i in range(len(buf) - 1):
-                        if buf[i] == 0xAA and buf[i + 1] == 0x55:
-                            idx = i
-                            break
-                    if idx < 0:
-                        buf.clear()
-                        break
-                    if idx + PAYLOAD_LEN > len(buf):
-                        del buf[:idx]
-                        break
-                    pkt = bytes(buf[idx:idx + PAYLOAD_LEN])
-                    del buf[:idx + PAYLOAD_LEN]
-                    result = parse_packet(pkt)
+                buf += chunk.decode("utf-8", errors="ignore")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    result = parse_line(line)
                     if result:
                         self.root.after(0, self.update_ui, result)
             time.sleep(0.05)
@@ -187,14 +167,12 @@ class App:
         self.last_label.config(text=f"最后更新：{time.strftime('%H:%M:%S')}")
 
         if d["alarm"]:
-            self.temp_label.config(fg="#dc2626")
             self.status_label.config(text="⚠ 报警中", fg="#ffffff", bg="#ef4444")
             self.root.configure(background="#fee2e2")
             if not self.was_alarm and winsound:
                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
             self.was_alarm = True
         else:
-            self.temp_label.config(fg="#1f2937")
             self.status_label.config(text="● 正常", fg="#15803d", bg="#dcfce7")
             self.root.configure(background="#f0f2f5")
             self.was_alarm = False
