@@ -235,7 +235,11 @@ static void Show_Set(void)
 	OLED_ShowString(2, 6, "H:");
 	Show_Int(2, 8, (int16_t)g_tempHigh);
 
-	if (g_setField == 1)
+	if (g_alarm)
+	{
+		OLED_ShowString(4, 1, "ALARM!");
+	}
+	else if (g_setField == 1)
 	{
 		OLED_ShowString(4, 1, "SET LOW");
 	}
