@@ -1,132 +1,92 @@
-#include "stm32f10x.h"
-#include "Delay.h"
-#include "OLED.h"
-#include "LED.h"
-#include "Key.h"
-#include "DS18B20.h"
-#include "Buzzer.h"
-#include "USART.h"
-#include "Serial.h"
-#include "NRF24L01.h"
-#include "DAC_Output.h"
-#include "Tick.h"
-
-/*==================== 角色配置 ====================*/
-/* 同一工程两种角色：
-   监测端（STM32 + 传感器 + 发送）      -> NRF_ROLE_MONITOR
-   接收端（第二块开发板 + 接收 + 串口）  -> NRF_ROLE_RECEIVER
-   下载到哪块板子就改成对应的角色 */
-#define NRF_ROLE_MONITOR    0
-#define NRF_ROLE_RECEIVER   1
-#define NRF_ROLE            NRF_ROLE_MONITOR
-
-#if (NRF_ROLE == NRF_ROLE_RECEIVER)
-
-/*==================== 接收端：NRF24L01 接收 -> 串口 -> 电脑 ====================*/
-int main(void)
-{
-	uint8_t data[NRF24L01_PAYLOAD];
-	uint8_t i;
-
-	USART1_Init();
-	if (NRF24L01_InitRX() != 0)
-	{
-		USART1_SendString("NRF24L01 init failed\r\n");
-	}
-
-	while (1)
-	{
-		if (NRF24L01_Receive(data, NRF24L01_PAYLOAD))
-		{
-			for (i = 0; i < NRF24L01_PAYLOAD; i++)
-			{
-				USART1_SendByte(data[i]);
-			}
-		}
-	}
-}
-
-#else
-
-/*==================== 监测端 ====================*/
+#include "stm32f10x.h"      // ST 标准外设库总头文件（包含所有寄存器定义）
+#include "Delay.h"          // 延时函数（Delay_us / Delay_ms / Delay_s）
+#include "OLED.h"           // OLED 显示屏驱动（软件 I2C，PB8/PB9）
+#include "LED.h"            // LED 驱动（PA1 报警灯 / PA2 状态灯）
+#include "Key.h"            // 按键驱动（PB1 / PB11，含非阻塞扫描）
+#include "DS18B20.h"        // DS18B20 温度传感器驱动（PB10，1-Wire）
+#include "Buzzer.h"         // 蜂鸣器驱动（PB0）
+#include "Serial.h"         // 串口驱动（USART1 / PA9，115200，用于无线串口模块）
+#include "DAC_Output.h"     // PWM 电压输出驱动（PA6 / TIM3_CH1，0~3.3V）
+#include "Tick.h"           // 毫秒时基（TIM2 中断，提供 millis()）
 
 /*==================== 参数配置 ====================*/
-#define TEMP_LOW_MIN     0.0f
-#define TEMP_LOW_MAX     59.0f
-#define TEMP_HIGH_MIN    1.0f
-#define TEMP_HIGH_MAX    60.0f
-#define TEMP_MIN_GAP     1.0f     /* 上下限最小间隔 */
-#define TEMP_HYST        0.5f     /* 报警回差（防抖动） */
-#define REPORT_INTERVAL  1000     /* 上报间隔（ms） */
-#define DISPLAY_INTERVAL 300      /* 刷新间隔（ms） */
-#define BEEP_INTERVAL    200      /* 报警声光切换间隔（ms） */
-#define KEY_DEBOUNCE_MS  10       /* 按键去抖（ms） */
-#define KEY_LONG_MS      800      /* 长按阈值（ms） */
-#define KEY_REPEAT_MS    150      /* 长按重复间隔（ms） */
+#define TEMP_LOW_MIN     0.0f      // 温度下限最小值
+#define TEMP_LOW_MAX     59.0f     // 温度下限最大值（必须小于上限）
+#define TEMP_HIGH_MIN    1.0f      // 温度上限最小值
+#define TEMP_HIGH_MAX    60.0f     // 温度上限最大值
+#define TEMP_MIN_GAP     1.0f      // 上下限最小间隔（防止区间无效）
+#define TEMP_HYST        0.5f      // 报警回差（防止温度在阈值附近抖动时反复报警）
+#define REPORT_INTERVAL  1000      // 串口上报间隔（毫秒），每 1 秒发一帧
+#define DISPLAY_INTERVAL 300       // OLED 刷新间隔（毫秒）
+#define BEEP_INTERVAL    200       // 报警时蜂鸣器/LED 的切换间隔（毫秒）
+#define KEY_DEBOUNCE_MS  10        // 按键去抖时间（毫秒）
+#define KEY_LONG_MS      800       // 长按判定阈值（毫秒）
+#define KEY_REPEAT_MS    150       // 长按后连续触发的间隔（毫秒）
 
 /*==================== 全局变量 ====================*/
-static float   g_tempLow  = 20.0f;		//温度下限
-static float   g_tempHigh = 60.0f;		//温度上限
-static float   g_temp     = 0.0f;		//当前温度
-static uint8_t g_tempValid = 0;			//0 还没拿到有效温度；1 已拿到
-static uint8_t g_alarm    = 0;			//0 正常；1 报警
-static uint8_t g_nrfOk    = 0;			//0 NRF24L01 初始化失败；1 正常
-static uint8_t g_setField = 0;			//0 监测；1 设置下限；2 设置上限
+static float   g_tempLow  = 20.0f;   // 当前设定的温度下限
+static float   g_tempHigh = 60.0f;   // 当前设定的温度上限
+static float   g_temp     = 0.0f;    // 最新一次测到的温度
+static uint8_t g_tempValid = 0;      // 温度是否有效：0 无效 / 1 有效
+static uint8_t g_alarm    = 0;       // 报警状态：0 正常 / 1 报警
+static uint8_t g_setField = 0;       // 设置模式：0 监测 / 1 设下限 / 2 设上限
 
 /*==================== 函数原型 ====================*/
-static void Show_Temp(uint8_t Line, uint8_t Col, float t);
-static void Show_Volt(uint8_t Line, uint8_t Col, float v);
-static void Show_Int(uint8_t Line, uint8_t Col, int16_t v);
-static void Show_Main(void);
-static void Show_Set(void);
-static uint8_t Key_GetEvent(void);
-static void Limit_Params(void);
-static void Temp_Task(void);
-static void Alarm_Task(void);
-static void Display_Task(void);
-//static void NRF24L01_Report_Task(void);
-static void Serial_Report_Task(void);
-static void Alarm_Output(void);
-static void Status_LED(void);
+static void Show_Temp(uint8_t Line, uint8_t Col, float t);   // 显示温度（1 位小数）
+static void Show_Volt(uint8_t Line, uint8_t Col, float v);   // 显示电压（2 位小数）
+static void Show_Int(uint8_t Line, uint8_t Col, int16_t v);  // 显示整数
+static void Show_Main(void);                                 // 主界面
+static void Show_Set(void);                                  // 设置界面
+static uint8_t Key_GetEvent(void);                           // 读取按键事件
+static void Limit_Params(void);                              // 参数限幅
+static void Temp_Task(void);                                 // 温度采集任务
+static void Alarm_Task(void);                                // 报警判断任务
+static void Display_Task(void);                              // 显示任务
+static void Serial_Report_Task(void);                        // 串口上报任务
+static void Alarm_Output(void);                              // 报警声光输出
+static void Status_LED(void);                                // 状态指示灯闪烁
 
 /*==================== 显示辅助 ====================*/
 /**
   * @brief  显示温度（1 位小数），如 25.3 / -5.3
+  * @param  Line 行号（1~4）
+  * @param  Col  起始列（1~16）
+  * @param  t    温度值
   */
 static void Show_Temp(uint8_t Line, uint8_t Col, float t)
 {
-	int16_t t10, ip, dp;
-	uint8_t col = Col;
+	int16_t t10, ip, dp;             // t10=温度×10；ip=整数部分；dp=小数部分
+	uint8_t col = Col;               // 当前列位置（边显示边右移）
 
-	if (t < -50.0f)
+	if (t < -50.0f)                  // 小于 -50 认为是传感器错误
 	{
-		OLED_ShowString(Line, Col, "--.-");
-		return;
+		OLED_ShowString(Line, Col, "--.-");   // 显示错误占位
+		return;                      // 直接返回
 	}
-	t10 = (int16_t)(t * 10.0f + (t >= 0 ? 0.5f : -0.5f));
-	ip = t10 / 10;
-	dp = t10 % 10;
-	if (dp < 0) dp = -dp;
+	t10 = (int16_t)(t * 10.0f + (t >= 0 ? 0.5f : -0.5f));  // 乘 10 并四舍五入
+	ip = t10 / 10;                   // 取整数部分
+	dp = t10 % 10;                   // 取小数部分
+	if (dp < 0) dp = -dp;            // 小数部分取绝对值
 
-	if (ip < 0)
+	if (ip < 0)                      // 整数部分为负
 	{
-		OLED_ShowChar(Line, col, '-');
-		col++;
-		ip = -ip;
+		OLED_ShowChar(Line, col, '-'); // 显示负号
+		col++;                       // 列右移一位
+		ip = -ip;                    // 整数部分取绝对值
 	}
-	if (ip >= 10)
+	if (ip >= 10)                    // 整数部分是两位数
 	{
-		OLED_ShowNum(Line, col, (uint32_t)ip, 2);
-		col += 2;
+		OLED_ShowNum(Line, col, (uint32_t)ip, 2);  // 显示两位
+		col += 2;                    // 列右移两位
 	}
-	else
+	else                             // 整数部分是一位数
 	{
-		OLED_ShowNum(Line, col, (uint32_t)ip, 1);
-		col += 1;
+		OLED_ShowNum(Line, col, (uint32_t)ip, 1);  // 显示一位
+		col += 1;                    // 列右移一位
 	}
-	OLED_ShowChar(Line, col, '.');
-	col++;
-	OLED_ShowNum(Line, col, (uint32_t)dp, 1);
+	OLED_ShowChar(Line, col, '.');   // 显示小数点
+	col++;                           // 列右移一位
+	OLED_ShowNum(Line, col, (uint32_t)dp, 1);  // 显示小数位
 }
 
 /**
@@ -134,95 +94,93 @@ static void Show_Temp(uint8_t Line, uint8_t Col, float t)
   */
 static void Show_Volt(uint8_t Line, uint8_t Col, float v)
 {
-	int16_t v100, ip, dp;
-	uint8_t col = Col;
+	int16_t v100, ip, dp;            // v100=电压×100；ip=整数部分；dp=小数部分
+	uint8_t col = Col;               // 当前列位置
 
-	if (v < 0.0f) v = 0.0f;
-	v100 = (int16_t)(v * 100.0f + 0.5f);
-	ip = v100 / 100;
-	dp = v100 % 100;
+	if (v < 0.0f) v = 0.0f;          // 负电压按 0 处理
+	v100 = (int16_t)(v * 100.0f + 0.5f);  // 乘 100 并四舍五入
+	ip = v100 / 100;                 // 整数部分
+	dp = v100 % 100;                 // 小数部分（两位）
 
-	if (ip >= 10)
+	if (ip >= 10)                    // 整数部分两位数
 	{
 		OLED_ShowNum(Line, col, (uint32_t)ip, 2);
 		col += 2;
 	}
-	else
+	else                             // 整数部分一位数
 	{
 		OLED_ShowNum(Line, col, (uint32_t)ip, 1);
 		col += 1;
 	}
-	OLED_ShowChar(Line, col, '.');
+	OLED_ShowChar(Line, col, '.');   // 小数点
 	col++;
-	OLED_ShowNum(Line, col, (uint32_t)dp, 2);
+	OLED_ShowNum(Line, col, (uint32_t)dp, 2);  // 小数两位
 }
 
 /**
-  * @brief  显示整数
+  * @brief  显示整数（不足两位不补零）
   */
 static void Show_Int(uint8_t Line, uint8_t Col, int16_t v)
 {
-	if (v < 0) v = 0;
-	if (v >= 10)
+	if (v < 0) v = 0;                // 负数按 0 处理
+	if (v >= 10)                     // 两位数
 	{
 		OLED_ShowNum(Line, Col, (uint32_t)v, 2);
 	}
-	else
+	else                             // 一位数
 	{
 		OLED_ShowNum(Line, Col, (uint32_t)v, 1);
 	}
 }
 
 /*==================== 显示界面 ====================*/
+// 主界面：第 1 行温度，第 2 行阈值，第 3 行电压，第 4 行状态
 static void Show_Main(void)
 {
-	OLED_ShowString(1, 1, "T:");
-	if (g_tempValid)
+	OLED_ShowString(1, 1, "T:");     // 第 1 行：温度标签
+	if (g_tempValid)                 // 温度有效
 	{
-		Show_Temp(1, 3, g_temp);
+		Show_Temp(1, 3, g_temp);     // 显示实时温度
+	}
+	else                             // 温度无效
+	{
+		OLED_ShowString(1, 3, "--.-");  // 显示占位
+	}
+	OLED_ShowString(1, 8, "C");      // 单位 ℃ 的 C
+
+	OLED_ShowString(2, 1, "L:");     // 第 2 行：下限标签
+	Show_Int(2, 3, (int16_t)g_tempLow);   // 显示温度下限
+	OLED_ShowString(2, 6, "H:");     // 上限标签
+	Show_Int(2, 8, (int16_t)g_tempHigh);  // 显示温度上限
+
+	OLED_ShowString(3, 1, "V:");     // 第 3 行：电压标签
+	if (g_tempValid)                 // 温度有效
+	{
+		Show_Volt(3, 3, DAC_Output_GetVoltage(g_temp));  // 显示对应输出电压
 	}
 	else
 	{
-		OLED_ShowString(1, 3, "--.-");
+		OLED_ShowString(3, 3, "--.--");  // 占位
 	}
-	OLED_ShowString(1, 8, "C");
+	OLED_ShowString(3, 7, "V");      // 单位 V
 
-	OLED_ShowString(2, 1, "L:");
-	Show_Int(2, 3, (int16_t)g_tempLow);
-	OLED_ShowString(2, 6, "H:");
-	Show_Int(2, 8, (int16_t)g_tempHigh);
-
-	OLED_ShowString(3, 1, "V:");
-	if (g_tempValid)
-	{
-		Show_Volt(3, 3, DAC_Output_GetVoltage(g_temp));
-	}
-	else
-	{
-		OLED_ShowString(3, 3, "--.--");
-	}
-	OLED_ShowString(3, 7, "V");
-
-	if (g_alarm)
+	if (g_alarm)                     // 报警中
 	{
 		OLED_ShowString(4, 1, "ALARM!");
 	}
-	else if (!g_nrfOk)
-	{
-		OLED_ShowString(4, 1, "NRF ERR");
-	}
-	else
+	else                             // 正常
 	{
 		OLED_ShowString(4, 1, "READY");
 	}
 }
 
+// 设置界面：显示温度与上下限，第 4 行提示当前在设哪一项
 static void Show_Set(void)
 {
-	OLED_ShowString(1, 1, "T:");
+	OLED_ShowString(1, 1, "T:");     // 温度标签
 	if (g_tempValid)
 	{
-		Show_Temp(1, 3, g_temp);
+		Show_Temp(1, 3, g_temp);     // 实时温度
 	}
 	else
 	{
@@ -230,30 +188,26 @@ static void Show_Set(void)
 	}
 	OLED_ShowString(1, 8, "C");
 
-	OLED_ShowString(2, 1, "L:");
-	Show_Int(2, 3, (int16_t)g_tempLow);
-	OLED_ShowString(2, 6, "H:");
-	Show_Int(2, 8, (int16_t)g_tempHigh);
+	OLED_ShowString(2, 1, "L:");     // 下限标签
+	Show_Int(2, 3, (int16_t)g_tempLow);   // 下限值
+	OLED_ShowString(2, 6, "H:");     // 上限标签
+	Show_Int(2, 8, (int16_t)g_tempHigh);  // 上限值
 
-	if (g_alarm)
-	{
-		OLED_ShowString(4, 1, "ALARM!");
-	}
-	else if (g_setField == 1)
+	if (g_setField == 1)             // 正在设下限
 	{
 		OLED_ShowString(4, 1, "SET LOW");
 	}
-	else
+	else                             // 正在设上限
 	{
 		OLED_ShowString(4, 1, "SET HIGH");
 	}
 }
 
 /*==================== 按键事件 ====================*/
-#define KEY_EVT_NONE   0
-#define KEY1_SHORT     1
-#define KEY2_SHORT     2
-#define KEY2_LONG      3
+#define KEY_EVT_NONE   0             // 没有按键事件
+#define KEY1_SHORT     1             // 按键 1 短按
+#define KEY2_SHORT     2             // 按键 2 短按
+#define KEY2_LONG      3             // 按键 2 长按（含连续触发）
 
 /**
   * @brief  读取按键事件（带消抖与长按识别）
@@ -261,333 +215,280 @@ static void Show_Set(void)
   */
 static uint8_t Key_GetEvent(void)
 {
-	static uint8_t stableState = 0;
-	static uint8_t lastStable = 0;
-	static uint32_t changeMs = 0;
-	static uint32_t pressMs = 0;
-	static uint32_t repeatMs = 0;
-	static uint8_t longFired = 0;
-	uint8_t raw = Key_Scan();
-	uint8_t evt = KEY_EVT_NONE;
+	static uint8_t stableState = 0;  // 消抖后的稳定状态（0 无 / 1 K1 / 2 K2）
+	static uint8_t lastStable = 0;   // 上一次的稳定状态（用于检测沿）
+	static uint32_t changeMs = 0;    // 状态变化时刻（用于去抖计时）
+	static uint32_t pressMs = 0;     // 按下时刻（用于判断长按）
+	static uint32_t repeatMs = 0;    // 上次长按触发时刻（用于连续触发）
+	static uint8_t longFired = 0;    // 长按是否已触发过（防止一次按下触发两次）
+	uint8_t raw = Key_Scan();        // 读取原始按键状态
+	uint8_t evt = KEY_EVT_NONE;      // 本次事件，默认无
 
-	if (raw != stableState)						//状态变化，重新计时去抖
+	if (raw != stableState)          // 状态发生变化
 	{
-		stableState = raw;
-		changeMs = millis();
-		return KEY_EVT_NONE;
+		stableState = raw;           // 记录新状态
+		changeMs = millis();         // 重新开始去抖计时
+		return KEY_EVT_NONE;         // 变化当期不产生事件
 	}
-	if (millis() - changeMs < KEY_DEBOUNCE_MS)
+	if (millis() - changeMs < KEY_DEBOUNCE_MS)  // 还没过去抖时间
 	{
-		return KEY_EVT_NONE;
+		return KEY_EVT_NONE;         // 丢弃
 	}
 
-	if (stableState != 0)
+	if (stableState != 0)            // 当前有按键按下
 	{
-		if (lastStable == 0)
+		if (lastStable == 0)         // 从无到有：刚按下
 		{
-			pressMs = millis();
-			longFired = 0;
+			pressMs = millis();      // 记录按下时刻
+			longFired = 0;           // 清除长按标志
 		}
 		else if (stableState == 2 && !longFired && millis() - pressMs >= KEY_LONG_MS)
-		{
-			longFired = 1;
-			repeatMs = millis();
-			evt = KEY2_LONG;
+		{                            // 按键 2 按住超过长按阈值
+			longFired = 1;           // 标记已触发长按
+			repeatMs = millis();     // 记录本次触发时刻
+			evt = KEY2_LONG;         // 产生长按事件
 		}
 		else if (stableState == 2 && longFired && millis() - repeatMs >= KEY_REPEAT_MS)
-		{
-			repeatMs = millis();
-			evt = KEY2_LONG;
+		{                            // 长按持续：每隔 repeat 时间连续触发
+			repeatMs = millis();     // 更新触发时刻
+			evt = KEY2_LONG;         // 继续产生长按事件（实现连续减）
 		}
 	}
-	else if (lastStable != 0)
+	else if (lastStable != 0)        // 从有到无：刚松手
 	{
-		if (lastStable == 1)
+		if (lastStable == 1)         // 松手前是按键 1
 		{
-			evt = KEY1_SHORT;
+			evt = KEY1_SHORT;        // 产生短按事件
 		}
-		else if (lastStable == 2 && !longFired)
+		else if (lastStable == 2 && !longFired)  // 松手前是按键 2 且没触发过长按
 		{
-			evt = KEY2_SHORT;
+			evt = KEY2_SHORT;        // 产生短按事件
 		}
 	}
 
-	lastStable = stableState;
-	return evt;
+	lastStable = stableState;        // 更新上一次状态
+	return evt;                      // 返回本次事件
 }
 
 /*==================== 参数限幅 ====================*/
+// 把温度上下限限制在合法范围内，并保证下限 < 上限
 static void Limit_Params(void)
 {
-	if (g_tempLow < TEMP_LOW_MIN)  g_tempLow = TEMP_LOW_MIN;
-	if (g_tempLow > TEMP_LOW_MAX)  g_tempLow = TEMP_LOW_MAX;
-	if (g_tempHigh < TEMP_HIGH_MIN) g_tempHigh = TEMP_HIGH_MIN;
-	if (g_tempHigh > TEMP_HIGH_MAX) g_tempHigh = TEMP_HIGH_MAX;
+	if (g_tempLow < TEMP_LOW_MIN)  g_tempLow = TEMP_LOW_MIN;    // 下限不得低于最小值
+	if (g_tempLow > TEMP_LOW_MAX)  g_tempLow = TEMP_LOW_MAX;    // 下限不得高于最大值
+	if (g_tempHigh < TEMP_HIGH_MIN) g_tempHigh = TEMP_HIGH_MIN; // 上限不得低于最小值
+	if (g_tempHigh > TEMP_HIGH_MAX) g_tempHigh = TEMP_HIGH_MAX; // 上限不得高于最大值
 
-	if (g_tempHigh < g_tempLow + TEMP_MIN_GAP)
+	if (g_tempHigh < g_tempLow + TEMP_MIN_GAP)   // 上限必须比下限大至少一个间隔
 	{
-		g_tempHigh = g_tempLow + TEMP_MIN_GAP;
-		if (g_tempHigh > TEMP_HIGH_MAX)
+		g_tempHigh = g_tempLow + TEMP_MIN_GAP;   // 先抬高上限
+		if (g_tempHigh > TEMP_HIGH_MAX)          // 抬高后超出最大值
 		{
-			g_tempHigh = TEMP_HIGH_MAX;
-			g_tempLow = g_tempHigh - TEMP_MIN_GAP;
+			g_tempHigh = TEMP_HIGH_MAX;          // 上限取最大值
+			g_tempLow = g_tempHigh - TEMP_MIN_GAP;  // 再反向压低下限
 		}
 	}
 }
 
 /*==================== 任务：温度采集 ====================*/
+// 状态机：先启动转换，等 750ms 后再读取（DS18B20 转换需要时间）
 static void Temp_Task(void)
 {
-	static uint32_t lastMs = 0;
-	static uint8_t state = 0;					//0 启动转换；1 等待读取
+	static uint32_t lastMs = 0;      // 启动转换的时刻
+	static uint8_t state = 0;        // 0 启动转换；1 等待读取
 
-	if (state == 0)
+	if (state == 0)                  // 需要启动一次转换
 	{
-		DS18B20_Start();
-		state = 1;
-		lastMs = millis();
+		DS18B20_Start();             // 发送启动转换命令
+		state = 1;                   // 进入等待状态
+		lastMs = millis();           // 记录启动时刻
 	}
-	else if (millis() - lastMs >= 750)			//12 位分辨率最长转换时间 750ms
+	else if (millis() - lastMs >= 750)  // 已等待 750ms（12 位分辨率最长转换时间）
 	{
-		float t = DS18B20_Get_Temp();
-		if (t > -50.0f)
+		float t = DS18B20_Get_Temp();   // 读取温度值
+		if (t > -50.0f)              // 读数有效（-50 以上认为是有效温度）
 		{
-			g_temp = t;
-			g_tempValid = 1;
+			g_temp = t;              // 保存温度
+			g_tempValid = 1;         // 标记有效
 		}
-		else
+		else                         // 读数无效（传感器未接/故障）
 		{
-			g_tempValid = 0;					//读取失败：显示 --.-，且不参与报警判断
+			g_tempValid = 0;         // 标记无效：显示 --.-，且不参与报警判断
 		}
-		state = 0;
+		state = 0;                   // 回到启动状态，开始下一次转换
 	}
 }
 
 /*==================== 任务：报警判断 ====================*/
+// 触发条件：温度 > 上限 或 < 下限；解除条件：回到回差区间内
 static void Alarm_Task(void)
 {
-	if (!g_tempValid)							//还没拿到有效温度，不判报警
+	if (!g_tempValid)                // 还没有效温度
 	{
-		g_alarm = 0;
-		return;
+		g_alarm = 0;                 // 不报警
+		return;                      // 直接返回
 	}
 
-	if (g_alarm == 0)
+	if (g_alarm == 0)                // 当前未报警：判断是否触发
 	{
-		if (g_temp > g_tempHigh || g_temp < g_tempLow)
+		if (g_temp > g_tempHigh || g_temp < g_tempLow)  // 温度越限
 		{
-			g_alarm = 1;
+			g_alarm = 1;             // 触发报警
 		}
 	}
-	else
+	else                             // 当前已报警：判断是否解除
 	{
 		if (g_temp <= g_tempHigh - TEMP_HYST && g_temp >= g_tempLow + TEMP_HYST)
 		{
-			g_alarm = 0;
+			g_alarm = 0;             // 回到回差区间内，解除报警
 		}
 	}
 }
 
 /*==================== 任务：显示 ====================*/
+// 每隔 DISPLAY_INTERVAL 刷新一次 OLED
 static void Display_Task(void)
 {
-	static uint32_t last = 0;
+	static uint32_t last = 0;        // 上次刷新时刻
 
-	if (millis() - last >= DISPLAY_INTERVAL)
+	if (millis() - last >= DISPLAY_INTERVAL)  // 到达刷新时间
 	{
-		last = millis();
-		if (g_setField == 0)
+		last = millis();             // 更新刷新时刻
+		if (g_setField == 0)         // 非设置模式
 		{
-			Show_Main();
+			Show_Main();             // 显示主界面
 		}
-		else
+		else                         // 设置模式
 		{
-			Show_Set();
+			Show_Set();              // 显示设置界面
 		}
 	}
 }
-
-/*==================== 任务：NRF24L01 上报（暂时停用，保留代码） ====================*/
-#if 0
-/*
- * 负载格式（16 字节，小端）：
- *  [0]    0xAA   帧头
- *  [1]    0x55   帧头
- *  [2-3]  int16  温度 × 10
- *  [4]    uint8  报警状态
- *  [5-6]  int16  温度下限
- *  [7-8]  int16  温度上限
- *  [9-10] int16  输出电压 × 100
- *  [11]   uint8  校验和（[0..10] 异或）
- *  [12-15] 保留
- */
-static void NRF24L01_Report_Task(void)
-{
-	static uint32_t last = 0;
-	uint8_t packet[NRF24L01_PAYLOAD];
-	int16_t t10, tl, th, v100;
-	uint8_t i, sum;
-
-	if (millis() - last < REPORT_INTERVAL)
-	{
-		return;
-	}
-	last = millis();
-
-	t10  = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
-	tl   = (int16_t)g_tempLow;
-	th   = (int16_t)g_tempHigh;
-	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);
-
-	packet[0]  = 0xAA;
-	packet[1]  = 0x55;
-	packet[2]  = (uint8_t)(t10 & 0xFF);
-	packet[3]  = (uint8_t)((t10 >> 8) & 0xFF);
-	packet[4]  = g_alarm;
-	packet[5]  = (uint8_t)(tl & 0xFF);
-	packet[6]  = (uint8_t)((tl >> 8) & 0xFF);
-	packet[7]  = (uint8_t)(th & 0xFF);
-	packet[8]  = (uint8_t)((th >> 8) & 0xFF);
-	packet[9]  = (uint8_t)(v100 & 0xFF);
-	packet[10] = (uint8_t)((v100 >> 8) & 0xFF);
-
-	sum = 0;
-	for (i = 0; i < 11; i++)
-	{
-		sum ^= packet[i];
-	}
-	packet[11] = sum;
-	packet[12] = 0;
-	packet[13] = 0;
-	packet[14] = 0;
-	packet[15] = 0;
-
-	NRF24L01_Send(packet, NRF24L01_PAYLOAD);
-}
-#endif
 
 /*==================== 任务：串口上报（无线串口模块） ====================*/
+// 每 1 秒通过串口发送一帧：T:温度,A:报警,TL:下限,TH:上限,V:电压
 static void Serial_Report_Task(void)
 {
-	static uint32_t last = 0;
-	int16_t t10, tl, th, v100;
+	static uint32_t last = 0;        // 上次上报时刻
+	int16_t t10, tl, th, v100;       // t10=温度×10；tl/th=上下限；v100=电压×100
 
-	if (millis() - last < REPORT_INTERVAL)
+	if (millis() - last < REPORT_INTERVAL)  // 还没到上报时间
 	{
-		return;
+		return;                      // 直接返回
 	}
-	last = millis();
+	last = millis();                 // 更新上报时刻
 
-	t10  = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));
-	tl   = (int16_t)g_tempLow;
-	th   = (int16_t)g_tempHigh;
-	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);
+	t10  = (int16_t)(g_temp * 10.0f + (g_temp >= 0 ? 0.5f : -0.5f));  // 温度放大 10 倍
+	tl   = (int16_t)g_tempLow;       // 温度下限
+	th   = (int16_t)g_tempHigh;      // 温度上限
+	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);  // 电压放大 100 倍
 
-	Serial_Printf("T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d\r\n",
-	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,
-	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100);
+	Serial_Printf("T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d\r\n",  // 发送一帧文本
+	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,     // 温度的整数与小数
+	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100);  // 报警/阈值/电压
 }
 
 /*==================== 报警输出 ====================*/
+// 报警时蜂鸣器与 LED1 每 200ms 翻转一次（鸣叫 + 闪烁）
 static void Alarm_Output(void)
 {
-	static uint32_t lastBeep = 0;
+	static uint32_t lastBeep = 0;    // 上次翻转时刻
 
-	if (g_alarm)
+	if (g_alarm)                     // 报警中
 	{
-		if (millis() - lastBeep >= BEEP_INTERVAL)
+		if (millis() - lastBeep >= BEEP_INTERVAL)  // 到达翻转时间
 		{
-			lastBeep = millis();
-			Buzzer_Turn();
-			LED1_Turn();
+			lastBeep = millis();     // 更新时刻
+			Buzzer_Turn();           // 蜂鸣器翻转
+			LED1_Turn();             // 报警灯翻转
 		}
 	}
-	else
+	else                             // 未报警
 	{
-		Buzzer_OFF();
-		LED1_OFF();
+		Buzzer_OFF();                // 关闭蜂鸣器
+		LED1_OFF();                  // 关闭报警灯
 	}
 }
 
 /*==================== 状态指示灯 ====================*/
+// 每 1 秒翻转一次 LED2，表示程序在正常运行（心跳）
 static void Status_LED(void)
 {
-	static uint32_t last = 0;
+	static uint32_t last = 0;        // 上次翻转时刻
 
-	if (millis() - last >= 1000)
+	if (millis() - last >= 1000)     // 到达 1 秒
 	{
-		last = millis();
-		LED2_Turn();
+		last = millis();             // 更新时刻
+		LED2_Turn();                 // 翻转状态灯
 	}
 }
 
 /*==================== 主函数 ====================*/
 int main(void)
 {
-	LED_Init();
-	Key_Init();
-	OLED_Init();
-	DS18B20_Init();
-	Buzzer_Init();
-	//USART1_Init();                        // 旧串口（RX 命令），暂时停用
-	Serial_Init();                          // 新串口（无线串口模块，TX）
-	//g_nrfOk = (NRF24L01_Init() == 0);     // NRF24L01 暂时停用
-	g_nrfOk = 1;
-	DAC_Output_Init();
-	Tick_Init();
+	/*---- 外设初始化 ----*/
+	LED_Init();          // 初始化 LED（PA1 / PA2）
+	Key_Init();          // 初始化按键（PB1 / PB11，上拉输入）
+	OLED_Init();         // 初始化 OLED（PB8/PB9 软件 I2C）
+	DS18B20_Init();      // 初始化 DS18B20（PB10）
+	Buzzer_Init();       // 初始化蜂鸣器（PB0，默认关闭）
+	Serial_Init();       // 初始化串口（USART1 / PA9，115200，接无线串口模块）
+	DAC_Output_Init();   // 初始化 PWM 电压输出（PA6 / TIM3_CH1）
+	Tick_Init();         // 初始化毫秒时基（TIM2 中断，提供 millis()）
 
-	OLED_Clear();
-	OLED_ShowString(1, 1, "Temp Monitor");
-	OLED_ShowString(2, 1, "Init...");
-	Delay_ms(500);
-	OLED_Clear();
+	/*---- 开机画面 ----*/
+	OLED_Clear();                          // 清屏
+	OLED_ShowString(1, 1, "Temp Monitor"); // 显示标题
+	OLED_ShowString(2, 1, "Init...");      // 显示初始化提示
+	Delay_ms(500);                         // 停留 0.5 秒
+	OLED_Clear();                          // 再次清屏，准备显示主界面
 
+	/*---- 主循环 ----*/
 	while (1)
 	{
-		Temp_Task();
-		Alarm_Task();
-		Display_Task();
-		//NRF24L01_Report_Task();
-		Serial_Report_Task();                   // 无线串口模块上报
+		Temp_Task();             // 采集温度（DS18B20）
+		Alarm_Task();            // 判断是否报警
+		Display_Task();          // 刷新 OLED 显示
+		Serial_Report_Task();    // 通过串口上报数据
 
-		switch (Key_GetEvent())
+		/*---- 按键处理 ----*/
+		switch (Key_GetEvent())  // 读取按键事件
 		{
-			case KEY1_SHORT:					//Key1 短按：切换设置项
-				g_setField = (uint8_t)((g_setField + 1) % 3);
+			case KEY1_SHORT:     // Key1 短按：在 正常/下限/上限 之间切换
+				g_setField = (uint8_t)((g_setField + 1) % 3);  // 切换设置项
 				break;
 
-			case KEY2_SHORT:					//Key2 短按：当前项 +1
-				if (g_setField == 1)
+			case KEY2_SHORT:     // Key2 短按：当前项 +1
+				if (g_setField == 1)         // 当前设下限
 				{
-					g_tempLow += 1.0f;
+					g_tempLow += 1.0f;       // 下限加 1
 				}
-				else if (g_setField == 2)
+				else if (g_setField == 2)    // 当前设上限
 				{
-					g_tempHigh += 1.0f;
+					g_tempHigh += 1.0f;      // 上限加 1
 				}
-				Limit_Params();
+				Limit_Params();              // 限幅，保证范围合法
 				break;
 
-			case KEY2_LONG:						//Key2 长按：当前项 -1
-				if (g_setField == 1)
+			case KEY2_LONG:      // Key2 长按：当前项 -1（连续减）
+				if (g_setField == 1)         // 当前设下限
 				{
-					g_tempLow -= 1.0f;
+					g_tempLow -= 1.0f;       // 下限减 1
 				}
-				else if (g_setField == 2)
+				else if (g_setField == 2)    // 当前设上限
 				{
-					g_tempHigh -= 1.0f;
+					g_tempHigh -= 1.0f;      // 上限减 1
 				}
-				Limit_Params();
+				Limit_Params();              // 限幅
 				break;
 
-			default:
+			default:             // 无事件
 				break;
 		}
 
-		DAC_Output_SetTemp(g_temp);
-		Alarm_Output();
-		Status_LED();
+		/*---- 输出 ----*/
+		DAC_Output_SetTemp(g_temp);  // 按当前温度更新 PWM 电压输出
+		Alarm_Output();              // 报警声光输出
+		Status_LED();                // 状态灯心跳
 	}
 }
-
-#endif /* NRF_ROLE */

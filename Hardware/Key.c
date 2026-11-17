@@ -19,7 +19,7 @@ void Key_Init(void)
 }
 
 /**
-  * @brief  按键扫描（非阻塞）
+  * @brief  按键扫描
   * @retval 0 无按键；1 Key1 按下；2 Key2 按下
   */
 uint8_t Key_Scan(void)

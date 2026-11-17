@@ -731,16 +731,6 @@
               <FilePath>.\Hardware\Buzzer.h</FilePath>
             </File>
             <File>
-              <FileName>USART.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\Hardware\USART.c</FilePath>
-            </File>
-            <File>
-              <FileName>USART.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\USART.h</FilePath>
-            </File>
-            <File>
               <FileName>DAC_Output.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Hardware\DAC_Output.c</FilePath>
@@ -749,16 +739,6 @@
               <FileName>DAC_Output.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\Hardware\DAC_Output.h</FilePath>
-            </File>
-            <File>
-              <FileName>NRF24L01.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\Hardware\NRF24L01.c</FilePath>
-            </File>
-            <File>
-              <FileName>NRF24L01.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\Hardware\NRF24L01.h</FilePath>
             </File>
             <File>
               <FileName>Serial.c</FileName>
