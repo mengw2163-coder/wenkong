@@ -20,6 +20,9 @@
 #define REPORT_INTERVAL  1000      // 串口上报间隔（毫秒），每 1 秒发一帧
 #define DISPLAY_INTERVAL 300       // OLED 刷新间隔（毫秒）
 #define LED_BLINK_MS     1000      // 状态灯闪烁间隔（毫秒），改成 2000 就是 2 秒闪一次
+#define LED_MODE_BLINK     0       // 模式：闪烁
+#define LED_MODE_BREATH    1       // 模式：呼吸
+#define LED_MODE         LED_MODE_BREATH   // ← 改这里切换：BLINK 或 BREATH
 #define BEEP_INTERVAL    200       // 报警时蜂鸣器/LED 的切换间隔（毫秒）
 #define KEY_DEBOUNCE_MS  10        // 按键去抖时间（毫秒）
 #define KEY_LONG_MS      800       // 长按判定阈值（毫秒）
@@ -50,7 +53,12 @@ static void Alarm_Task(void);                                // 报警判断任�
 static void Display_Task(void);                              // 显示任务
 static void Serial_Report_Task(void);                        // 串口上报任务
 static void Alarm_Output(void);                              // 报警声光输出
-static void Blink_Task(void);                               // 状态灯闪烁任务
+#if LED_MODE == LED_MODE_BLINK
+static void Blink_Task(void);
+#endif
+#if LED_MODE == LED_MODE_BREATH
+static void Breath_Task(void);
+#endif                               // 状态灯闪烁任务
 
 /*==================== 显示辅助 ====================*/
 /**
@@ -392,9 +400,9 @@ static void Serial_Report_Task(void)
 	th   = (int16_t)g_tempHigh;      // 温度上限
 	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);  // 电压放大 100 倍
 
-	Serial_Printf(" T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d,L:%d\r\n",  // 发送一帧文本
+	Serial_Printf(" T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d,L:%s\r\n",  // 发送一帧文本
 	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,     // 温度的整数与小数
-	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100, g_led);  // 报警/阈值/电压/灯状态
+	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100, g_led ? "亮" : "灭");  // 灯状态：1 亮 / 0 灭
 }
 
 /*==================== 报警输出 ====================*/
@@ -420,10 +428,11 @@ static void Alarm_Output(void)
 }
 
 
+#if LED_MODE == LED_MODE_BLINK
 /*==================== 状态灯闪烁 ====================*/
 // LED2 每隔 LED_BLINK_MS 切换一次亮/灭。
 // 江协风格：用 LED2_ON() / LED2_OFF() 控制灯。
-// 改闪烁快慢：把上面宏 LED_BLINK_MS 改成 1000（1 秒）或 2000（2 秒）。
+// 改闪烁快慢：把宏 LED_BLINK_MS 改成 1000（1 秒）或 2000（2 秒）。
 // g_led 记录当前亮/灭，供串口上报（0 灭 / 1 亮）。
 static void Blink_Task(void)
 {
@@ -445,6 +454,28 @@ static void Blink_Task(void)
 		}
 	}
 }
+#endif
+
+#if LED_MODE == LED_MODE_BREATH
+/*==================== 呼吸灯 ====================*/
+// LED2 接 PA2（TIM2 通道 3），占空比 0 → 100 → 0，形成呼吸。
+// 想改快慢：改 Delay_ms(20)；想改最亮：改 100。
+static void Breath_Task(void)
+{
+	uint8_t i;
+
+	for (i = 0; i <= 100; i++)       // 渐亮
+	{
+		PWM_SetCompare3(i * 10);
+		Delay_ms(20);
+	}
+	for (i = 100; i > 0; i--)        // 渐暗
+	{
+		PWM_SetCompare3(i * 10);
+		Delay_ms(20);
+	}
+}
+#endif
 
 /*==================== 主函数 ====================*/
 int main(void)
@@ -458,7 +489,9 @@ int main(void)
 	Serial_Init();       // 初始化串口（USART1 / PA9，115200，接无线串口模块）
 	DAC_Output_Init();   // 初始化 PWM 电压输出（PA6 / TIM3_CH1）
 	Tick_Init();         // 初始化毫秒时基（TIM2 中断，提供 millis()）
-	// PWM 驱动保留备用；当前状态灯用 GPIO 闪烁，暂不初始化 PWM
+	#if LED_MODE == LED_MODE_BREATH
+	PWM_Init();          // 呼吸灯需要 PWM（需在 Tick_Init 之后）
+#endif
 
 	/*---- 开机画面 ----*/
 	OLED_Clear();                          // 清屏
@@ -515,6 +548,10 @@ int main(void)
 		/*---- 输出 ----*/
 		DAC_Output_SetTemp(g_temp);  // 按当前温度更新 PWM 电压输出
 		Alarm_Output();              // 报警声光输出
+#if LED_MODE == LED_MODE_BREATH
+		Breath_Task();               // 呼吸灯
+#else
 		Blink_Task();                // 状态灯闪烁
+#endif
 	}
 }
