@@ -11,15 +11,19 @@ void Serial_Init(void)
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
 
 	GPIO_InitTypeDef GPIO_InitStructure;
-	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;			// TX 复用推挽输出
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;	// RX 浮空输入
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
 	GPIO_Init(GPIOA, &GPIO_InitStructure);
 
 	USART_InitTypeDef USART_InitStructure;
 	USART_InitStructure.USART_BaudRate = 115200;
 	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
-	USART_InitStructure.USART_Mode = USART_Mode_Tx;
+	USART_InitStructure.USART_Mode = USART_Mode_Tx | USART_Mode_Rx;	// 收发
 	USART_InitStructure.USART_Parity = USART_Parity_No;
 	USART_InitStructure.USART_StopBits = USART_StopBits_1;
 	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -104,4 +108,19 @@ void Serial_Printf(const char *format, ...)
 	vsnprintf(String, sizeof(String), format, arg);
 	va_end(arg);
 	Serial_SendString(String);
+}
+
+/**
+  * 函    数：查询串口是否收到一个字节（轮询方式，最简单）
+  * 参    数：byte 用于存放收到的字节
+  * 返 回 值：1 收到 / 0 没收到
+  */
+uint8_t Serial_ReceiveByte(uint8_t *byte)
+{
+	if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE) != RESET)
+	{
+		*byte = (uint8_t)USART_ReceiveData(USART1);
+		return 1;
+	}
+	return 0;
 }

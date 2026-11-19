@@ -9,5 +9,6 @@ void Serial_SendArray(uint8_t *Array, uint16_t Length);
 void Serial_SendString(const char *String);
 void Serial_SendNumber(uint32_t Number, uint8_t Length);
 void Serial_Printf(const char *format, ...);
+uint8_t Serial_ReceiveByte(uint8_t *byte);
 
 #endif

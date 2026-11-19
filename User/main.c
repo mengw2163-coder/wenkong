@@ -39,7 +39,7 @@ static uint8_t g_tempValid = 0;      // 温度是否有效：0 无效 / 1 有效
 static uint8_t g_alarm    = 0;       // 报警状态：0 正常 / 1 报警
 static uint8_t g_setField = 0;       // 设置模式：0 监测 / 1 设下限 / 2 设上限
 static uint8_t g_led     = 0;       // 状态灯当前状态：0 灭 / 1 亮（供串口上报）
-
+static uint8_t  g_breath = 1;
 /*==================== 函数原型 ====================*/
 static void Show_Temp(uint8_t Line, uint8_t Col, float t);   // 显示温度（1 位小数）
 static void Show_Volt(uint8_t Line, uint8_t Col, float v);   // 显示电压（2 位小数）
@@ -51,7 +51,8 @@ static void Limit_Params(void);                              // 参数限幅
 static void Temp_Task(void);                                 // 温度采集任务
 static void Alarm_Task(void);                                // 报警判断任务
 static void Display_Task(void);                              // 显示任务
-static void Serial_Report_Task(void);                        // 串口上报任务
+static void Serial_Report_Task(void);                     // 串口上报任务
+static void Serial_Echo_Task(void);                        // 串口回显任务
 static void Alarm_Output(void);                              // 报警声光输出
 #if LED_MODE == LED_MODE_BLINK
 static void Blink_Task(void);
@@ -400,9 +401,22 @@ static void Serial_Report_Task(void)
 	th   = (int16_t)g_tempHigh;      // 温度上限
 	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);  // 电压放大 100 倍
 
-	Serial_Printf(" T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d,L:%s\r\n",  // 发送一帧文本
+	Serial_Printf(" T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d,L:%s,h:%ds\r\n",  // 发送一帧文本
 	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,     // 温度的整数与小数
-	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100, g_led ? "亮" : "灭");  // 灯状态：1 亮 / 0 灭
+	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100, g_led ? "1" : "0",g_breath );  // 灯状态：1 亮 / 0 灭
+}
+
+/*==================== 串口回显 ====================*/
+// 电脑发什么，STM32 就发回什么（轮询方式，最简单）
+// 想改成“收到 1 就亮灯”之类，把下面 Serial_SendByte(data) 换掉即可
+static void Serial_Echo_Task(void)
+{
+	uint8_t data;
+
+	if (Serial_ReceiveByte(&data))   // 收到一个字节
+	{
+		Serial_SendByte(data);       // 原样发回（串口助手就能看到 1）
+	}
 }
 
 /*==================== 报警输出 ====================*/
@@ -459,20 +473,20 @@ static void Blink_Task(void)
 #if LED_MODE == LED_MODE_BREATH
 /*==================== 呼吸灯 ====================*/
 // LED2 接 PA2（TIM2 通道 3），占空比 0 → 100 → 0，形成呼吸。
-// 想改快慢：改 Delay_ms(20)；想改最亮：改 100。
+
 static void Breath_Task(void)
 {
 	uint8_t i;
 
-	for (i = 0; i <= 100; i++)       // 渐亮
+	for (i = 0; i <= 100; i++)       
 	{
 		PWM_SetCompare3(i * 10);
-		Delay_ms(20);
+		Delay_ms(g_breath *5);
 	}
-	for (i = 100; i > 0; i--)        // 渐暗
+	for (i = 100; i > 0; i--)        
 	{
 		PWM_SetCompare3(i * 10);
-		Delay_ms(20);
+		Delay_ms(g_breath*5);
 	}
 }
 #endif
@@ -509,6 +523,7 @@ int main(void)
 		Alarm_Task();            // 判断是否报警
 		Display_Task();          // 刷新 OLED 显示
 		Serial_Report_Task();    // 通过串口上报数据
+		Serial_Echo_Task();      // 串口回显：收到什么发回什么
 
 		/*---- 按键处理 ----*/
 		switch (Key_GetEvent())  // 读取按键事件
