@@ -750,6 +750,16 @@
               <FileType>5</FileType>
               <FilePath>.\Hardware\Serial.h</FilePath>
             </File>
+            <File>
+              <FileName>BreathLED.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Hardware\BreathLED.c</FilePath>
+            </File>
+            <File>
+              <FileName>BreathLED.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Hardware\BreathLED.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -1,13 +1,14 @@
-#include "stm32f10x.h"      // ST 标准外设库总头文件（包含所有寄存器定义）
+#include "stm32f10x.h"      
 #include "Delay.h"          // 延时函数（Delay_us / Delay_ms / Delay_s）
 #include "OLED.h"           // OLED 显示屏驱动（软件 I2C，PB8/PB9）
 #include "LED.h"            // LED 驱动（PA1 报警灯 / PA2 状态灯）
-#include "Key.h"            // 按键驱动（PB1 / PB11，含非阻塞扫描）
+#include "Key.h"            // 按键驱动（PB1 / PB11）
 #include "DS18B20.h"        // DS18B20 温度传感器驱动（PB10，1-Wire）
 #include "Buzzer.h"         // 蜂鸣器驱动（PB0）
 #include "Serial.h"         // 串口驱动（USART1 / PA9，115200，用于无线串口模块）
 #include "DAC_Output.h"     // PWM 电压输出驱动（PA6 / TIM3_CH1，0~3.3V）
 #include "Tick.h"           // 毫秒时基（TIM2 中断，提供 millis()）
+#include "BreathLED.h"      // 呼吸灯（TIM2 通道 3 / PA2 PWM）
 
 /*==================== 参数配置 ====================*/
 #define TEMP_LOW_MIN     0.0f      // 温度下限最小值
@@ -24,6 +25,9 @@
 #define KEY_REPEAT_MS    150       // 长按后连续触发的间隔（毫秒）
 
 /*==================== 全局变量 ====================*/
+// 文件级 static：只在本文件内可见（别的文件 extern 也连不上），避免被外部乱改。
+// g_temp 是 DS18B20 实测温度（一直变）；g_tempLow / g_tempHigh 是按键设定的报警阈值
+// （由用户设定），报警时用实测值与阈值比较，两者不是一回事。
 static float   g_tempLow  = 20.0f;   // 当前设定的温度下限
 static float   g_tempHigh = 60.0f;   // 当前设定的温度上限
 static float   g_temp     = 0.0f;    // 最新一次测到的温度
@@ -44,7 +48,7 @@ static void Alarm_Task(void);                                // 报警判断任�
 static void Display_Task(void);                              // 显示任务
 static void Serial_Report_Task(void);                        // 串口上报任务
 static void Alarm_Output(void);                              // 报警声光输出
-static void Status_LED(void);                                // 状态指示灯闪烁
+static void Breath_Task(void);                               // 呼吸灯任务
 
 /*==================== 显示辅助 ====================*/
 /**
@@ -242,7 +246,7 @@ static uint8_t Key_GetEvent(void)
 			pressMs = millis();      // 记录按下时刻
 			longFired = 0;           // 清除长按标志
 		}
-		else if (stableState == 2 && !longFired && millis() - pressMs >= KEY_LONG_MS)
+		else if ((stableState == 2) && (!longFired) && (millis() - pressMs >= KEY_LONG_MS))
 		{                            // 按键 2 按住超过长按阈值
 			longFired = 1;           // 标记已触发长按
 			repeatMs = millis();     // 记录本次触发时刻
@@ -269,9 +273,10 @@ static uint8_t Key_GetEvent(void)
 	lastStable = stableState;        // 更新上一次状态
 	return evt;                      // 返回本次事件
 }
-
+//只要状态一变，就重新计时 10ms。机械按键按下/松开的瞬间会在几毫秒内反复跳变，每次跳变都把计时清零；等连续 10ms 状态都不再变化，才认为这次变化是「真的」。
 /*==================== 参数限幅 ====================*/
-// 把温度上下限限制在合法范围内，并保证下限 < 上限
+// 限幅（clamp）：把上下限各自夹在 [MIN, MAX] 合法区间内，再保证上限 ≥ 下限 + 最小间隔。
+// 注意：这里的 g_tempLow / g_tempHigh 是用户设定的报警阈值，不是传感器实测温度。
 static void Limit_Params(void)
 {
 	if (g_tempLow < TEMP_LOW_MIN)  g_tempLow = TEMP_LOW_MIN;    // 下限不得低于最小值
@@ -291,11 +296,13 @@ static void Limit_Params(void)
 }
 
 /*==================== 任务：温度采集 ====================*/
-// 状态机：先启动转换，等 750ms 后再读取（DS18B20 转换需要时间）
+// 状态机：先启动转换，等 750ms 后再读取（DS18B20 转换需要时间）。
+// lastMs / state 用 static：函数返回后仍保留，把「启动→等待→读取」拆到多圈循环里完成；
+// 若用普通局部变量，每次进来 state 都归 0，只会反复发启动命令，永远读不到温度。
 static void Temp_Task(void)
 {
-	static uint32_t lastMs = 0;      // 启动转换的时刻
-	static uint8_t state = 0;        // 0 启动转换；1 等待读取
+	static uint32_t lastMs = 0;      // 启动转换的时刻（static：跨调用保存）
+	static uint8_t state = 0;        // 0 启动转换；1 等待读取（static：跨调用保存）
 
 	if (state == 0)                  // 需要启动一次转换
 	{
@@ -306,7 +313,7 @@ static void Temp_Task(void)
 	else if (millis() - lastMs >= 750)  // 已等待 750ms（12 位分辨率最长转换时间）
 	{
 		float t = DS18B20_Get_Temp();   // 读取温度值
-		if (t > -50.0f)              // 读数有效（-50 以上认为是有效温度）
+		if (t > -50.0f )              // 读数有效（-50到100认为是有效温度）
 		{
 			g_temp = t;              // 保存温度
 			g_tempValid = 1;         // 标记有效
@@ -383,7 +390,7 @@ static void Serial_Report_Task(void)
 	th   = (int16_t)g_tempHigh;      // 温度上限
 	v100 = (int16_t)(DAC_Output_GetVoltage(g_temp) * 100.0f + 0.5f);  // 电压放大 100 倍
 
-	Serial_Printf("T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d\r\n",  // 发送一帧文本
+	Serial_Printf(" T:%d.%d,A:%d,TL:%d,TH:%d,V:%d.%02d\r\n",  // 发送一帧文本
 	              t10 / 10, (t10 < 0 ? -t10 : t10) % 10,     // 温度的整数与小数
 	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100);  // 报警/阈值/电压
 }
@@ -410,16 +417,21 @@ static void Alarm_Output(void)
 	}
 }
 
-/*==================== 状态指示灯 ====================*/
-// 每 1 秒翻转一次 LED2，表示程序在正常运行（心跳）
-static void Status_LED(void)
+/*==================== 呼吸灯（教材式：for 循环 + 延时）====================*/
+// LED2（PA2 / TIM2_CH3 PWM）占空比 0→100 渐亮，再 100→0 渐暗，形成呼吸。
+static void Breath_Task(void)
 {
-	static uint32_t last = 0;        // 上次翻转时刻
+	uint8_t i;
 
-	if (millis() - last >= 1000)     // 到达 1 秒
+	for (i = 0; i <= 100; i++)        // 渐亮：占空比 0 → 100
 	{
-		last = millis();             // 更新时刻
-		LED2_Turn();                 // 翻转状态灯
+		BreathLED_Set(i);
+		Delay_ms(20);
+	}
+	for (i = 100; i > 0; i--)         // 渐暗：占空比 100 → 0
+	{
+		BreathLED_Set(i);
+		Delay_ms(20);
 	}
 }
 
@@ -435,6 +447,7 @@ int main(void)
 	Serial_Init();       // 初始化串口（USART1 / PA9，115200，接无线串口模块）
 	DAC_Output_Init();   // 初始化 PWM 电压输出（PA6 / TIM3_CH1）
 	Tick_Init();         // 初始化毫秒时基（TIM2 中断，提供 millis()）
+	BreathLED_Init();    // 初始化呼吸灯（TIM2 通道 3 / PA2 PWM）
 
 	/*---- 开机画面 ----*/
 	OLED_Clear();                          // 清屏
@@ -444,6 +457,8 @@ int main(void)
 	OLED_Clear();                          // 再次清屏，准备显示主界面
 
 	/*---- 主循环 ----*/
+	// 协作式调度：每个任务函数每次只执行一小步就返回，把 CPU 让给下一个任务；
+	// 任务内部的 static 局部变量用于保存跨调用的状态与时刻（见各任务注释）。
 	while (1)
 	{
 		Temp_Task();             // 采集温度（DS18B20）
@@ -489,6 +504,6 @@ int main(void)
 		/*---- 输出 ----*/
 		DAC_Output_SetTemp(g_temp);  // 按当前温度更新 PWM 电压输出
 		Alarm_Output();              // 报警声光输出
-		Status_LED();                // 状态灯心跳
+		Breath_Task();               // 状态灯呼吸
 	}
 }

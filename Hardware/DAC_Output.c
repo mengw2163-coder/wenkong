@@ -67,7 +67,7 @@ float DAC_Output_GetVoltage(float temp)
 
 	if (s_tHigh <= s_tLow)
 	{
-		return 0.0f;
+		return 1.0f;
 	}
 	if (temp < s_tLow)  temp = s_tLow;
 	if (temp > s_tHigh) temp = s_tHigh;
@@ -83,8 +83,10 @@ void DAC_Output_SetTemp(float temp)
 {
 	float vout = DAC_Output_GetVoltage(temp);
 
-	if (vout < 0.0f) vout = 0.0f;
+	if (vout < 1.0f) vout = 1.0f;
 	if (vout > DAC_V_REF) vout = DAC_V_REF;
-
-	TIM_SetCompare1(TIM3, (uint32_t)(vout / DAC_V_REF * (DAC_PWM_ARR + 1)));
+   TIM_SetCompare1(TIM3, (uint32_t)(vout / DAC_V_REF * (DAC_PWM_ARR + 1)));
+	
+	
 }
+

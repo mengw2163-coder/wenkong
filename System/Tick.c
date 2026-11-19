@@ -14,6 +14,8 @@ void Tick_Init(void)
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
 
 	/* 72MHz / 72 / 1000 = 1kHz → 1ms */
+	/* TIM_Period=999：从 0 数到 999 共 1000 个计数溢出一次（+1 是因为从 0 开始）；
+	   TIM_Prescaler=71 即 72 分频，72MHz→1MHz，每个计数 1us，故 1000us=1ms 触发一次更新中断。 */
 	TIM_TimeBaseStructure.TIM_Period = 999;
 	TIM_TimeBaseStructure.TIM_Prescaler = 71;
 	TIM_TimeBaseStructure.TIM_ClockDivision = TIM_CKD_DIV1;
