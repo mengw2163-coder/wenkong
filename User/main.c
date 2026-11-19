@@ -406,16 +406,21 @@ static void Serial_Report_Task(void)
 	              g_alarm, tl, th, v100 / 100, (v100 < 0 ? -v100 : v100) % 100, g_led ? "1" : "0",g_breath );  // 灯状态：1 亮 / 0 灭
 }
 
-/*==================== 串口回显 ====================*/
-// 电脑发什么，STM32 就发回什么（轮询方式，最简单）
-// 想改成“收到 1 就亮灯”之类，把下面 Serial_SendByte(data) 换掉即可
+/*==================== 串口回显 / 控制 ====================*/
+// 电脑发 1~9：把呼吸灯周期设为 1~9 秒（g_breath 越大越慢）
+// 同时把收到的字符原样发回，方便确认
 static void Serial_Echo_Task(void)
 {
 	uint8_t data;
 
 	if (Serial_ReceiveByte(&data))   // 收到一个字节
 	{
-		Serial_SendByte(data);       // 原样发回（串口助手就能看到 1）
+		if (data >= '1' && data <= '9')          // 收到数字 1~9
+		{
+			g_breath = (uint8_t)(data - '0');    // 1 → 1 秒，2 → 2 秒…
+		}
+
+		Serial_SendByte(data);       // 原样发回
 	}
 }
 
