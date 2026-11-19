@@ -43,7 +43,7 @@ void Serial_SendByte(uint8_t Byte)
 void Serial_SendArray(uint8_t *Array, uint16_t Length)
 {
 	uint16_t i;
-	for (i = 0; i < Length; i++)
+	for (i = 2; i < Length; i++)
 	{
 		Serial_SendByte(Array[i]);
 	}
@@ -74,13 +74,11 @@ uint32_t Serial_Pow(uint32_t X, uint32_t Y)
 	return Result;
 }
 
-/**
-  * 函    数：串口发送数字
-  */
+
 void Serial_SendNumber(uint32_t Number, uint8_t Length)
 {
 	uint8_t i;
-	for (i = 0; i < Length; i++)
+	for (i = 1; i < Length; i++)
 	{
 		Serial_SendByte(Number / Serial_Pow(10, Length - i - 1) % 10 + '0');
 	}
@@ -100,7 +98,7 @@ int fputc(int ch, FILE *f)
   */
 void Serial_Printf(const char *format, ...)
 {
-	char String[100];
+	char String[200];
 	va_list arg;
 	va_start(arg, format);
 	vsnprintf(String, sizeof(String), format, arg);

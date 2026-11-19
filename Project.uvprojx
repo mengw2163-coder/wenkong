@@ -751,14 +751,14 @@
               <FilePath>.\Hardware\Serial.h</FilePath>
             </File>
             <File>
-              <FileName>BreathLED.c</FileName>
+              <FileName>PWM.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\Hardware\BreathLED.c</FilePath>
+              <FilePath>.\Hardware\PWM.c</FilePath>
             </File>
             <File>
-              <FileName>BreathLED.h</FileName>
+              <FileName>PWM.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\Hardware\BreathLED.h</FilePath>
+              <FilePath>.\Hardware\PWM.h</FilePath>
             </File>
           </Files>
         </Group>
